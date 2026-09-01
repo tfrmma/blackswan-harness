@@ -1,7 +1,7 @@
 # blackswan-harness
 
-Deterministic chaos engineering for OMS/SOR and other latency-sensitive
-trading infrastructure. Two layers: kernel-level fault injection (eBPF,
+Deterministic chaos engineering for latency-sensitive trading
+infrastructure. Two layers: kernel-level fault injection (eBPF,
 cgroups, time namespaces) that works against any target with zero code
 changes, and protocol-aware adapters (FIX, exchange WS/REST) for
 exchange-semantic faults that don't exist at the kernel level, silent
