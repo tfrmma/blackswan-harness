@@ -35,18 +35,38 @@ impl<'a> Runner<'a> {
         Ok(Self { schedule, injectors, ctx })
     }
 
-    // Drives the schedule to completion, calling arm/disarm on real
-    // injectors as steps come due, recording everything into a Trace.
-    // tick_ns controls how finely the virtual clock advances between
-    // checks, smaller is more precise but means more scheduler.advance()
-    // calls, callers driving this against wall-clock-sensitive injectors
-    // (like XDP against real traffic) want this small enough that steps
-    // fire close to their scheduled at_ns.
+    // Drives the schedule to completion as fast as possible, calling
+    // arm/disarm on real injectors in schedule order, recording everything
+    // into a Trace. Never sleeps in real time, tick_ns only controls virtual
+    // clock granularity between checks. Correct for replay verification
+    // (confirm a scenario reproduces a trace, fast), wrong for actually
+    // exercising a live injector against real external traffic, that needs
+    // real wall-clock time to elapse so something else has a chance to
+    // reach it, see run_realtime for that.
     pub fn run(&mut self, tick_ns: u64) -> Result<Trace, HarnessError> {
+        self.run_inner(tick_ns, false)
+    }
+
+    // Same as run(), but actually sleeps roughly tick_ns of wall-clock time
+    // between virtual clock advances, so a scenario's real duration
+    // elapses for real. Found the need for this the hard way: a CLI `run`
+    // that called plain run() armed and disarmed a FIX proxy fault in
+    // microseconds and exited before any external client could reach it,
+    // the schedule's at_ns values are meaningless as a real exercise window
+    // if nothing ever waits for them.
+    pub fn run_realtime(&mut self, tick_ns: u64) -> Result<Trace, HarnessError> {
+        self.run_inner(tick_ns, true)
+    }
+
+    fn run_inner(&mut self, tick_ns: u64, realtime: bool) -> Result<Trace, HarnessError> {
         let mut scheduler = Scheduler::new(self.schedule, 0);
         let mut trace = Trace::new(self.schedule.name(), self.schedule.seed());
 
         while !scheduler.is_finished() {
+            if realtime {
+                std::thread::sleep(std::time::Duration::from_nanos(tick_ns));
+            }
+
             let due: Vec<_> = scheduler.advance(tick_ns).to_vec();
             let now = scheduler.now_ns();
 
@@ -190,6 +210,42 @@ mod tests {
         assert_eq!(arm_calls.load(Ordering::SeqCst), 1);
         assert_eq!(disarm_calls.load(Ordering::SeqCst), 1);
         assert_eq!(trace.events.len(), 2);
+    }
+
+    #[test]
+    fn run_realtime_actually_takes_real_time_unlike_run() {
+        let injector = CountingInjector {
+            id: "pkt-loss".into(),
+            armed: false,
+            arm_calls: Arc::new(AtomicUsize::new(0)),
+            disarm_calls: Arc::new(AtomicUsize::new(0)),
+        };
+
+        // 20 steps of 5ms each, 100ms of virtual time total, small enough
+        // to keep the test fast but large enough that "didn't sleep at
+        // all" and "actually slept" are unmistakably different durations
+        let steps: Vec<_> = (0..20)
+            .map(|i| ScenarioStep {
+                at_ns: i * 5_000_000,
+                fault_id: "pkt-loss".into(),
+                action: if i % 2 == 0 { StepAction::Arm } else { StepAction::Disarm },
+            })
+            .collect();
+        let scenario = Scenario { name: "test".into(), seed: 1, steps };
+        let schedule = ValidatedSchedule::validate(scenario).unwrap();
+
+        let mut injectors: HashMap<String, Box<dyn FaultInjector>> = HashMap::new();
+        injectors.insert("pkt-loss".into(), Box::new(injector));
+
+        let mut runner = Runner::new(&schedule, injectors, ctx()).unwrap();
+        let started = std::time::Instant::now();
+        runner.run_realtime(5_000_000).unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed >= std::time::Duration::from_millis(90),
+            "run_realtime should take roughly 100ms of real time, took {elapsed:?}"
+        );
     }
 
     #[test]
