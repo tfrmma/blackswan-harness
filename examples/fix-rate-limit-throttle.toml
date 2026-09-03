@@ -1,0 +1,18 @@
+name = "fix-rate-limit-demo"
+seed = 42
+
+[injectors.throttle]
+type = "fix_rate_limit_throttle"
+listen_addr = "127.0.0.1:19100"
+upstream_addr = "127.0.0.1:19101"
+threshold = 3
+
+[[schedule]]
+at_ns = 0
+fault_id = "throttle"
+action = "arm"
+
+[[schedule]]
+at_ns = 5000000000
+fault_id = "throttle"
+action = "disarm"
