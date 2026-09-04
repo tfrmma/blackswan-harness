@@ -1,189 +1,161 @@
 # blackswan-harness
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+Deterministic chaos engineering for latency-sensitive
+trading infrastructure. Two layers: kernel-level fault injection (eBPF,
+cgroups, time namespaces) that works against any target with zero code
+changes, and protocol-aware adapters (FIX, exchange WS/REST) for
+exchange-semantic faults that don't exist at the kernel level, silent
+rejects, acks without execution, sudden rate-limit throttling.
 
-Deterministic chaos engineering for OMS/SOR and other latency-sensitive
-trading infrastructure.
-
-Most chaos tools tell you a fault happened. This one guarantees it happens
-again, exactly the same way, on demand. Every run in blackswan-harness is
-seeded and replayable: the same scenario executed twice produces a
-bit-exact identical sequence of events. A scenario that finds a bug should
-reproduce that bug, not "probably" reproduce it.
-
-## Why
-
-Chaos testing for trading systems usually means one of two things: a shell
-script that runs `tc` and `iptables` by hand, or a general-purpose chaos
-tool (built for microservices and Kubernetes) bent into a shape it wasn't
-designed for. Neither gives you two things that actually matter for this
-domain:
-
-- **Reproducibility.** If a fault scenario surfaces a race condition or a
-  reconciliation bug, you need to hit it again on demand, not hope it
-  recurs. Every fault decision in blackswan-harness traces back to a seeded
-  RNG and a virtual clock, recorded in a `Trace` that can be replayed and
-  compared bit-for-bit against a previous run.
-- **Protocol awareness.** A dropped TCP packet and a silently rejected FIX
-  order are different failure modes that break different code paths. Kernel
-  level chaos (dropped packets, corrupted bytes, partitioned peers, memory
-  pressure, clock skew) can't express the second kind. blackswan-harness
-  treats both as first-class, composable faults.
-
-## Architecture
-
-Two layers, both implementing the same `FaultInjector` trait so they run
-through the same scheduler and the same scenario format:
-
-- **Layer 1, kernel-level.** eBPF (XDP) for packet loss, byte corruption,
-  and peer partitioning; cgroups for memory pressure; Linux time namespaces
-  for clock skew. Works against any target process with zero code changes,
-  no agent to install, no library to link.
-- **Layer 2, protocol-aware.** A real man-in-the-middle proxy that parses
-  the wire protocol and realizes faults that only make sense at that level:
-  a silent reject, an order acknowledged but never filled, a request that
-  vanishes under simulated rate-limit throttling. FIX is implemented today;
-  the adapter interface is protocol-agnostic.
-
-Every fault is deterministic by construction. Kernel-level decisions run on
-counters and configuration written from userspace, never on in-kernel
-randomness. Protocol-level decisions read parsed message fields against
-rules you set, never a coin flip.
-
-```
-Scenario (seed + timed steps)
-        |
-        v
-ValidatedSchedule --> Scheduler --> Runner --> FaultInjector (layer 1 or 2)
-                                       |
-                                       v
-                                    Trace (recorded, replayable, comparable)
-```
+Every fault run is seeded and replayable. A scenario that finds a bug should
+reproduce that bug bit-exact, not just "probably" reproduce it.
 
 ## Status
 
-**Layer 1 is complete.** Three real XDP faults (packet loss, byte
-corruption, network partition), cgroup-based memory pressure, and time
-namespace clock skew, all verified against a live kernel, not mocked.
+Layer 1 (kernel-level fault injection) is complete: three real XDP faults
+(packet loss, byte corruption, network partition), cgroup-based memory
+pressure, and time namespace clock skew. Layer 2 (protocol-aware adapters)
+has its first real target: FIX, with three exchange-semantic faults (silent
+reject, ack without execution, rate-limit throttle) running through a real
+TCP proxy. Phase 5 (control plane) has a real CLI: `blackswan run` drives a
+TOML-configured scenario against real injectors in real time, `blackswan
+replay` confirms a scenario reproduces a saved trace bit-exact. Verified
+end to end, config file through real sockets and a real kernel fault, not
+just unit tested in isolation.
 
-**Layer 2 has its first target: FIX.** Three exchange-semantic faults
-(silent reject, ack without execution, rate-limit throttle) running through
-a real TCP proxy, verified over live sockets.
+## Layout
 
-**Not built yet:** the control plane (scenario config files, a real CLI),
-additional protocol adapters (WebSocket, REST), and further FIX message
-coverage. See [Roadmap](#roadmap) and [Known limitations](#known-limitations).
-
-## Example
-
-```rust
-use blackswan_core::{FaultContext, FaultInjector, Scenario, ScenarioStep, StepAction, SystemClock};
-use blackswan_kernel::XdpPacketLossInjector;
-use blackswan_replay::{Runner, ValidatedSchedule};
-use std::collections::HashMap;
-use std::sync::Arc;
-
-let scenario = Scenario {
-    name: "gateway-packet-loss".into(),
-    seed: 42,
-    steps: vec![
-        ScenarioStep { at_ns: 0, fault_id: "pktloss".into(), action: StepAction::Arm },
-        ScenarioStep { at_ns: 30_000_000_000, fault_id: "pktloss".into(), action: StepAction::Disarm },
-    ],
-};
-let schedule = ValidatedSchedule::validate(scenario)?;
-
-let mut injectors: HashMap<String, Box<dyn FaultInjector>> = HashMap::new();
-injectors.insert("pktloss".into(), Box::new(XdpPacketLossInjector::new("pktloss", "eth0", 20)));
-
-let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 42 };
-let mut runner = Runner::new(&schedule, injectors, ctx)?;
-let trace = runner.run(1_000_000)?;
-trace.save(std::path::Path::new("run.json"))?;
-```
-
-Run it again with the same seed and the same schedule, and `trace` will
-`matches_schedule()` the one you just saved.
-
-## Crate layout
-
-- **`core`** — shared traits everything else depends on: `FaultInjector`
-  (arm/disarm/is_armed), `ProtocolAdapter`, `Clock`, `Scenario`. No eBPF,
-  cgroup, or protocol-specific code here.
-- **`replay`** — the determinism engine. `DeterministicRng` (SplitMix64),
-  `ValidatedSchedule` (structural validation of a `Scenario`), `Scheduler`
-  (drives a virtual clock against a schedule), `Trace` (record, persist,
-  reload, bit-exact compare), `Runner` (ties a schedule to real injectors,
-  arms/disarms them at the right time, disarms anything still armed on
-  drop).
-- **`kernel`** — layer 1. `XdpPacketLossInjector`, `XdpCorruptionInjector`,
-  `XdpPartitionInjector` (eBPF, compiled at build time via clang, loaded
-  through `aya`), `CgroupMemoryPressureInjector` (v1/v2 aware), and
-  `TimeSkewInjector` (Linux time namespaces; structurally different from
-  every other injector here, see its doc comment).
-- **`adapters`** — layer 2. `fix/` holds a from-scratch FIX 4.0-4.4 parser,
-  stream framing, a real TCP proxy (`FixProxy`), three `ProtocolAdapter`
-  implementations, and `FixFaultInjector`, which wraps any `ProtocolAdapter`
-  as a `FaultInjector`.
-- **`cli`** — the control plane binary. Currently a no-op; this is phase 5.
-
-## Requirements
-
-Compiling `kernel` needs `clang` and `libbpf-dev` (for `bpf/bpf_helpers.h`)
-on the build machine. Running any kernel-level injector, directly or
-through `Runner`, needs root or `CAP_BPF` + `CAP_NET_ADMIN`. The layer 1
-live tests are `#[ignore]`d by default and share state (network interfaces,
-cgroups), run them explicitly and serialized:
-
-```
-cargo test -p blackswan-kernel -- --ignored --test-threads=1
-```
-
-Layer 2 tests need no special privileges, plain TCP sockets:
-
-```
-cargo test -p blackswan-adapters
-```
+- `crates/core` - shared traits (`FaultInjector`, `ProtocolAdapter`, `Clock`,
+  `Scenario`). Everything else depends on this, nothing in here depends on
+  eBPF, cgroups, or any specific protocol.
+- `crates/replay` - determinism engine: `DeterministicRng` (SplitMix64),
+  `ValidatedSchedule` (structural checks on a `Scenario`), `Scheduler`
+  (drives a `VirtualClock` against a schedule), `Trace` (record, save,
+  reload, and bit-exact compare a run), and `Runner` (ties a schedule to a
+  registry of real `FaultInjector`s, arms/disarms them at the right times,
+  disarms anything still armed on drop). Implemented and tested.
+- `crates/kernel` - layer 1, kernel-level fault injection. `XdpPacketLossInjector`,
+  `XdpCorruptionInjector`, and `XdpPartitionInjector` are real: XDP programs
+  (`bpf/xdp_pktloss.c`, `bpf/xdp_corrupt.c`, `bpf/xdp_partition.c`) compiled
+  at build time via clang targeting `bpf`, loaded and attached through
+  `aya`. All fully deterministic, no in-kernel randomness, every fault
+  decision comes from userspace config maps. None of the three can attach to
+  the same interface simultaneously (XDP allows one program per interface
+  per attach mode), see the TODO in `kernel/src/lib.rs`, worth unifying into
+  a single dispatcher before a fourth XDP fault shows up.
+  `CgroupMemoryPressureInjector` (`kernel/src/cgroup_mem.rs`) is real too:
+  detects cgroup v1 vs v2 at arm time, creates a child cgroup, moves the
+  target pid in, writes a byte limit (`memory.max`/`memory.high` on v2,
+  `memory.limit_in_bytes`/`memory.soft_limit_in_bytes` on v1).
+  `TimeSkewInjector` (`kernel/src/time_skew.rs`) is the last layer 1 piece:
+  clock skew via Linux time namespaces. Structurally different from every
+  other injector here, time namespaces can only be configured for a process
+  at its own `exec()`, never retroactively, so `arm()` launches its own
+  supervised child instead of attaching to an existing target, and
+  `disarm()` terminates that child rather than just neutralizing an effect
+  (documented as the explicit exception on `FaultInjector::disarm` itself).
+  Only `CLOCK_MONOTONIC`/`CLOCK_BOOTTIME` are affected, never
+  `CLOCK_REALTIME`, that's a hard kernel limitation. Layer 1 is complete.
+- `crates/adapters` - layer 2, protocol-aware exchange fault injection. FIX
+  4.0-4.4 dialect (3-field header: BeginString, BodyLength, MsgType; the
+  FIXT.1.1/5.0 extended header isn't supported). `crates/adapters/src/fix/`:
+  `message.rs` (parsing, checksum, verified against a real reference
+  message), `framing.rs` (finds message boundaries in a TCP byte stream),
+  `proxy.rs` (`FixProxy`, a real TCP man-in-the-middle, single connection at
+  a time), `adapter.rs` (`FixSilentReject`, `FixAckWithoutExecution`,
+  `FixRateLimitThrottle`, the actual `ProtocolAdapter` decision logic),
+  `injector.rs` (`FixFaultInjector`, wraps any `ProtocolAdapter` as a
+  `FaultInjector`, composition instead of one struct per fault since all
+  three share the same proxy mechanism and only differ in decision logic).
+  Verified end to end over real TCP sockets, no root needed.
+- `crates/cli` - the control plane binary (`blackswan`). `run` loads a TOML
+  scenario config, builds the named injectors, and drives them through
+  `Runner::run_realtime` so live faults (a listening FIX proxy, an attached
+  XDP hook) stay reachable by real external traffic for the scenario's real
+  duration, not just fire virtually and exit. `replay` re-runs a scenario
+  fast (`Runner::run`, no real-time pacing) and confirms it reproduces a
+  previously saved `Trace` bit-exact. `config.rs` has one variant per real
+  injector this binary knows how to build; `build.rs` turns a config entry
+  into the actual injector. Example configs in `examples/`.
 
 ## Known limitations
 
-- `xdp_partition` only understands plain Ethernet + IPv4. No VLAN, no IPv6,
-  no IP fragmentation. Packets outside that are safely passed through
-  rather than mismatched, but that's real missing coverage for a target on
-  a tagged VLAN or dual-stack, not a cosmetic gap.
-- No throughput/load testing on any XDP injector, only lightly spaced
-  traffic in the live tests. The global atomic counters should hold up
-  under real concurrency; that hasn't been verified under load yet.
-- None of the three XDP injectors can attach to the same interface
+- `xdp_partition` only understands plain Ethernet + IPv4. No VLAN (802.1Q
+  shifts the EtherType position), no IPv6, no IP fragmentation. Packets in
+  any of those categories are safely ignored (never matched, so the fault
+  never fires on them), but that's a real coverage gap for a target running
+  dual-stack or on a tagged VLAN, not just a cosmetic one.
+- No throughput/load testing on any XDP injector yet, only traffic spaced
+  5ms apart in the live tests. The global atomic counter should hold up
+  under real concurrency, but "should" isn't "verified", worth a real
+  saturation test before trusting the exact drop/corrupt counts under load.
+- None of `XdpPacketLossInjector`, `XdpCorruptionInjector`, and
+  `XdpPartitionInjector` can be attached to the same interface
   simultaneously (XDP allows one program per interface per attach mode).
-  Running two of them on the same target at once is a real use case and
-  needs a shared dispatcher, not built yet.
-- `CgroupMemoryPressureInjector` detects and targets both cgroup v1 and v2,
-  but only v1 has actually been exercised in CI/dev so far. The v2 path
-  follows the documented interface but needs verification on a v2-only
-  machine before it's fully trusted.
-- `FixProxy` handles one client connection at a time. Fine for testing a
-  single OMS/SOR instance against one exchange session, not for concurrent
-  FIX sessions through the same proxy.
-- FIX coverage is narrow: three message types, flat fields only (no
-  repeating groups), and `InterceptAction::Mutate` has no adapter using it
-  yet. WebSocket and REST adapters don't exist yet either.
+  Not blocking right now, memory pressure and clock skew aren't XDP-based,
+  but running two of these three faults on the same target at once is a
+  real use case and needs the dispatcher unification mentioned in
+  `kernel/src/lib.rs` before release.
+- `CgroupMemoryPressureInjector` detects and supports both cgroup v1 and v2
+  memory controller interfaces, but only the v1 path has actually been
+  exercised: this sandbox has `memory` delegated on the legacy v1 hierarchy,
+  not v2 unified (`cgroup.controllers` at the v2 root only lists `hugetlb`),
+  verified directly rather than assumed. The v2 code path follows the
+  documented cgroup-v2 interface but needs real verification on a v2-only
+  machine before it's trusted.
+- `FixProxy` handles one client connection at a time, a second connection
+  attempt queues in the OS backlog rather than being actively refused, and
+  won't be served until the first session ends. Fine for testing a single
+  OMS/SOR instance against one exchange session, not for anything wanting
+  concurrent FIX sessions through the same proxy.
+- The FIX adapters only inspect flat fields (35, 39, 150), no repeating
+  group support. Not needed for the three faults implemented so far, would
+  matter for anything wanting to key off a field inside a repeating group.
+- Only three FIX message types are handled (ExecutionReport, Reject,
+  OrderCancelReject) and `InterceptAction::Mutate` has no FIX adapter using
+  it yet, mutating an outbound NewOrderSingle (wrong price, stale ClOrdID,
+  wrong side) is a real gap, not just an unlikely one.
+- FIX is the only protocol adapter. WebSocket (most crypto exchange retail
+  APIs) and plain REST (order entry over HTTP, real 429s instead of FIX
+  BusinessMessageReject) are the obvious next targets, deliberately not
+  built yet, and deliberately not forced through `FixProxy`'s shape since
+  one example isn't enough evidence for what a shared proxy abstraction
+  across three different protocols should look like.
 - No test yet exercises a real failure path (arming against a nonexistent
-  interface, for example) to confirm errors propagate cleanly, only the
-  happy path has live coverage so far.
+  interface, for example) to confirm `HarnessError::ArmFailed` actually
+  propagates cleanly in practice, only the happy path has live coverage so
+  far.
 
-## Roadmap
+## CI
 
-- **Phase 5 — control plane.** Scenario config files, a real CLI, run/replay
-  subcommands, structured reporting of what fired and when.
-- **Phase 6 — validation and release.** Real runs against production-shaped
-  OMS/SOR targets, and a CI that's actually demanding: privileged runners
-  for the live kernel tests, an arm64 leg, multiple kernel versions in the
-  matrix, a determinism gate that fails the build on a `Trace` mismatch,
-  clippy and fmt as hard gates.
-- **Beyond that:** more FIX message coverage, WebSocket and REST adapters,
-  `tc`/`netem`-based latency and reordering faults (a different mechanism
-  from XDP, not shoehorned into it).
+`.github/workflows/ci.yml`. Four jobs: `fmt` and `clippy` (both hard gates,
+`-D warnings`, matching the zero-warnings bar this repo has been held to by
+hand throughout), `test` (a matrix across ubuntu-22.04, ubuntu-24.04, and
+ubuntu-24.04-arm, each running the normal suite plus the privileged kernel
+tests via `sudo`), and `determinism-gate` (builds the CLI, runs the FIX
+rate-limit example scenario, then replays it and asserts the trace matches
+bit-exact, the actual promise this README opens with, checked in CI, not
+just in an isolated unit test).
+
+The arm64 leg is real, not aspirational: `kernel/build.rs` used to hardcode
+the x86_64 multiarch include path, fixed while wiring this up (via
+`dpkg-architecture -qDEB_HOST_MULTIARCH`, with a fallback for the two
+architectures this crate claims to support), otherwise the arm64 job would
+have failed on the first push.
+
+Caveat: this workflow is written against verified facts (the runner labels,
+the actions used, local reproduction of what each job runs) but hasn't
+been exercised by an actual GitHub Actions run yet, that needs a real push
+to confirm.
+
+## Requirements
+
+Compiling `crates/kernel` needs `clang` and `libbpf-dev` (for
+`bpf/bpf_helpers.h`) on the build machine. Running `XdpPacketLossInjector`
+directly or through `Runner`, needs root or `CAP_BPF` + `CAP_NET_ADMIN`. The
+live tests are `#[ignore]`d by default and share the loopback interface, run
+them explicitly and serialized with
+`cargo test -p blackswan-kernel -- --ignored --test-threads=1`.
 
 ## License
 
