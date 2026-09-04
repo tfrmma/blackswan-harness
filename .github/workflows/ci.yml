@@ -1,0 +1,84 @@
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: install eBPF build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libbpf-dev
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test / ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-22.04 (x86_64)
+            runner: ubuntu-22.04
+          - name: ubuntu-24.04 (x86_64)
+            runner: ubuntu-24.04
+          - name: ubuntu-24.04 (arm64)
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.runner }}
+      - name: install eBPF build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libbpf-dev
+      - name: build
+        run: cargo build --workspace --verbose
+      - name: unit and integration tests (no elevated privilege needed)
+        run: cargo test --workspace --verbose
+      - name: privileged kernel tests
+        run: sudo -E env "PATH=$PATH" cargo test -p blackswan-kernel -- --ignored --test-threads=1
+
+  determinism-gate:
+    name: determinism gate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: install eBPF build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libbpf-dev
+      - name: build the cli
+        run: cargo build -p blackswan-cli
+        
+      - name: run the reference scenario, save a baseline trace
+        run: |
+          ./target/debug/blackswan run \
+            --config examples/fix-rate-limit-throttle.toml \
+            --trace-out /tmp/baseline-trace.json
+      - name: run it again, confirm it reproduces the baseline bit-exact
+        run: |
+          ./target/debug/blackswan replay \
+            --config examples/fix-rate-limit-throttle.toml \
+            --against /tmp/baseline-trace.json
