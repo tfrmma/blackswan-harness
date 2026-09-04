@@ -5,6 +5,43 @@ fn main() {
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set by cargo");
 
+    // TARGET (not std::env::consts::ARCH, which reflects the host running
+    // this build script, not necessarily what we're building for under
+    // cross-compilation) is the triple cargo sets for build scripts.
+    let target = std::env::var("TARGET").expect("TARGET not set by cargo");
+    let target_arch = target.split('-').next().expect("malformed TARGET triple");
+
+    let bpf_arch_define = match target_arch {
+        "x86_64" => "__TARGET_ARCH_x86",
+        "aarch64" => "__TARGET_ARCH_arm64",
+        other => panic!(
+            "unsupported target architecture for eBPF build: {other}. \
+             Only x86_64 and aarch64 are known here, see kernel/build.rs."
+        ),
+    };
+
+    // Prefer asking dpkg directly for the real multiarch include directory
+    // (this is a native build, dpkg-architecture reflects the system
+    // actually running clang). Fall back to the conventional GNU triple for
+    // the two architectures this crate claims to support if dpkg-architecture
+    // isn't available (non-Debian-based system), rather than silently
+    // guessing for anything else.
+    let multiarch_dir = Command::new("dpkg-architecture")
+        .arg("-qDEB_HOST_MULTIARCH")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| match target_arch {
+            "x86_64" => "x86_64-linux-gnu".to_string(),
+            "aarch64" => "aarch64-linux-gnu".to_string(),
+            other => panic!(
+                "dpkg-architecture isn't available and there's no fallback multiarch \
+                     path known for {other}, see kernel/build.rs."
+            ),
+        });
+    let multiarch_include = format!("-I/usr/include/{multiarch_dir}");
+
     let entries = std::fs::read_dir("bpf").expect("bpf/ directory missing");
     for entry in entries {
         let path = entry.expect("readdir entry").path();
@@ -15,17 +52,14 @@ fn main() {
         let stem = path.file_stem().expect("bpf source has no filename").to_string_lossy();
         let out_path = format!("{out_dir}/{stem}.o");
 
-        // TODO: the x86_64-linux-gnu include path is hardcoded, this only
-        // works on x86_64. Needs to branch on target_arch (or shell out to
-        // `clang -print-multiarch`) before this can build on arm64.
         let status = Command::new("clang")
             .args([
                 "-O2",
                 "-target",
                 "bpf",
-                "-D__TARGET_ARCH_x86",
+                &format!("-D{bpf_arch_define}"),
                 "-I/usr/include/bpf",
-                "-I/usr/include/x86_64-linux-gnu",
+                &multiarch_include,
                 "-c",
             ])
             .arg(&path)
