@@ -28,7 +28,11 @@ pub struct FixProxy {
 }
 
 impl FixProxy {
-    pub fn new(listen_addr: impl Into<String>, upstream_addr: impl Into<String>, adapter: Arc<dyn ProtocolAdapter>) -> Self {
+    pub fn new(
+        listen_addr: impl Into<String>,
+        upstream_addr: impl Into<String>,
+        adapter: Arc<dyn ProtocolAdapter>,
+    ) -> Self {
         Self {
             listen_addr: listen_addr.into(),
             upstream_addr: upstream_addr.into(),
@@ -147,12 +151,14 @@ fn relay(
             Err(_) => return,
         }
 
-        loop {
-            let Ok(Some(len)) = find_complete_message(&buf) else { break };
+        while let Ok(Some(len)) = find_complete_message(&buf) {
             let message_bytes: Vec<u8> = buf.drain(..len).collect();
 
             let action = if enabled.load(Ordering::SeqCst) {
-                let msg = RawMessage { bytes: message_bytes.clone(), direction };
+                let msg = RawMessage {
+                    bytes: message_bytes.clone(),
+                    direction,
+                };
                 adapter.intercept(&msg).unwrap_or(InterceptAction::Forward)
             } else {
                 InterceptAction::Forward
