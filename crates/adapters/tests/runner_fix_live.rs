@@ -47,14 +47,20 @@ fn scenario_arms_a_real_fix_fault_through_the_runner() {
         stream.write_all(&build_execution_report("0", "0")).unwrap();
         stream.write_all(&build_execution_report("8", "8")).unwrap();
     });
-    let exchange_port = port_rx.recv_timeout(Duration::from_secs(2)).expect("fake exchange bound");
+    let exchange_port = port_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("fake exchange bound");
 
     // only an Arm step, mirrors runner_xdp_pktloss_live's structure: the
     // Runner's drop-guard teardown on scope exit is what disarms this
     let scenario = Scenario {
         name: "runner-fix-silent-reject".into(),
         seed: 7,
-        steps: vec![ScenarioStep { at_ns: 0, fault_id: "fix-silent-reject".into(), action: StepAction::Arm }],
+        steps: vec![ScenarioStep {
+            at_ns: 0,
+            fault_id: "fix-silent-reject".into(),
+            action: StepAction::Arm,
+        }],
     };
     let schedule = ValidatedSchedule::validate(scenario).expect("well formed scenario");
 
@@ -68,7 +74,10 @@ fn scenario_arms_a_real_fix_fault_through_the_runner() {
     let mut injectors: HashMap<String, Box<dyn FaultInjector>> = HashMap::new();
     injectors.insert("fix-silent-reject".into(), Box::new(injector));
 
-    let ctx = blackswan_core::FaultContext { clock: Arc::new(SystemClock), seed: 7 };
+    let ctx = blackswan_core::FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 7,
+    };
 
     {
         let mut runner = Runner::new(&schedule, injectors, ctx).expect("runner setup");

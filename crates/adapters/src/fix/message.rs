@@ -61,7 +61,9 @@ pub fn parse(bytes: &[u8]) -> Result<FixMessage<'_>, ParseError> {
 // the checksum field's own tag=value=SOH, mod 256, per the FIX spec.
 // Callers pass everything up to and including the SOH before "10=".
 pub fn compute_checksum(bytes_before_checksum_field: &[u8]) -> u8 {
-    bytes_before_checksum_field.iter().fold(0u8, |acc, &b| acc.wrapping_add(b))
+    bytes_before_checksum_field
+        .iter()
+        .fold(0u8, |acc, &b| acc.wrapping_add(b))
 }
 
 pub fn format_checksum(sum: u8) -> String {

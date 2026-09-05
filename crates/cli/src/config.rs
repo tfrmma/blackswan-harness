@@ -19,14 +19,44 @@ pub struct Config {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InjectorConfig {
-    XdpPacketLoss { iface: String, drop_every_n: u32 },
-    XdpCorruption { iface: String, corrupt_every_n: u32, offset: u32, mask: u8 },
-    XdpPartition { iface: String, src_ip: Ipv4Addr, src_port: u16 },
-    CgroupMemoryPressure { pid: u32, limit_bytes: u64, mode: PressureModeConfig },
-    TimeSkew { argv: Vec<String>, monotonic_offset_secs: i64, boottime_offset_secs: i64 },
-    FixSilentReject { listen_addr: String, upstream_addr: String },
-    FixAckWithoutExecution { listen_addr: String, upstream_addr: String },
-    FixRateLimitThrottle { listen_addr: String, upstream_addr: String, threshold: u64 },
+    XdpPacketLoss {
+        iface: String,
+        drop_every_n: u32,
+    },
+    XdpCorruption {
+        iface: String,
+        corrupt_every_n: u32,
+        offset: u32,
+        mask: u8,
+    },
+    XdpPartition {
+        iface: String,
+        src_ip: Ipv4Addr,
+        src_port: u16,
+    },
+    CgroupMemoryPressure {
+        pid: u32,
+        limit_bytes: u64,
+        mode: PressureModeConfig,
+    },
+    TimeSkew {
+        argv: Vec<String>,
+        monotonic_offset_secs: i64,
+        boottime_offset_secs: i64,
+    },
+    FixSilentReject {
+        listen_addr: String,
+        upstream_addr: String,
+    },
+    FixAckWithoutExecution {
+        listen_addr: String,
+        upstream_addr: String,
+    },
+    FixRateLimitThrottle {
+        listen_addr: String,
+        upstream_addr: String,
+        threshold: u64,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,7 +76,9 @@ mod tests {
             injector: InjectorConfig,
         }
         let wrapped = format!("[injector]\n{toml_body}");
-        toml::from_str::<Wrapper>(&wrapped).expect("parse injector config").injector
+        toml::from_str::<Wrapper>(&wrapped)
+            .expect("parse injector config")
+            .injector
     }
 
     #[test]
@@ -72,7 +104,9 @@ mod tests {
             InjectorConfig::TimeSkew { .. }
         ));
         assert!(matches!(
-            parse_one("type = \"fix_silent_reject\"\nlisten_addr = \"127.0.0.1:9001\"\nupstream_addr = \"127.0.0.1:9002\""),
+            parse_one(
+                "type = \"fix_silent_reject\"\nlisten_addr = \"127.0.0.1:9001\"\nupstream_addr = \"127.0.0.1:9002\""
+            ),
             InjectorConfig::FixSilentReject { .. }
         ));
         assert!(matches!(

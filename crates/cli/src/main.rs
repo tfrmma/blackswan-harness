@@ -54,7 +54,11 @@ fn load_config(path: &PathBuf) -> config::Config {
 }
 
 fn build_scenario_and_injectors(cfg: config::Config) -> (Scenario, HashMap<String, Box<dyn FaultInjector>>) {
-    let scenario = Scenario { name: cfg.name, seed: cfg.seed, steps: cfg.schedule };
+    let scenario = Scenario {
+        name: cfg.name,
+        seed: cfg.seed,
+        steps: cfg.schedule,
+    };
     let injectors = cfg
         .injectors
         .into_iter()
@@ -69,7 +73,10 @@ fn build_scenario_and_injectors(cfg: config::Config) -> (Scenario, HashMap<Strin
 fn print_trace_summary(trace: &Trace) {
     println!("scenario: {} (seed {})", trace.scenario_name, trace.seed);
     for event in &trace.events {
-        println!("  {:>14} ns  {:<20} {:?}", event.step.at_ns, event.step.fault_id, event.step.action);
+        println!(
+            "  {:>14} ns  {:<20} {:?}",
+            event.step.at_ns, event.step.fault_id, event.step.action
+        );
     }
 }
 
@@ -80,11 +87,18 @@ fn execute_scenario(config_path: &PathBuf, tick_ns: u64, realtime: bool) -> Trac
 
     let schedule = ValidatedSchedule::validate(scenario).unwrap_or_else(|e| die(format!("invalid scenario: {e:?}")));
 
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed,
+    };
     let mut runner =
         Runner::new(&schedule, injectors, ctx).unwrap_or_else(|e| die(format!("setting up runner: {e:?}")));
 
-    let result = if realtime { runner.run_realtime(tick_ns) } else { runner.run(tick_ns) };
+    let result = if realtime {
+        runner.run_realtime(tick_ns)
+    } else {
+        runner.run(tick_ns)
+    };
     result.unwrap_or_else(|e| die(format!("run failed: {e:?}")))
 }
 
@@ -92,7 +106,11 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Run { config, tick_ns, trace_out } => {
+        Command::Run {
+            config,
+            tick_ns,
+            trace_out,
+        } => {
             let trace = execute_scenario(&config, tick_ns, true);
             print_trace_summary(&trace);
 
@@ -101,7 +119,11 @@ fn main() {
                 println!("trace saved to {}", out.display());
             }
         }
-        Command::Replay { config, tick_ns, against } => {
+        Command::Replay {
+            config,
+            tick_ns,
+            against,
+        } => {
             let baseline =
                 Trace::load(&against).unwrap_or_else(|e| die(format!("loading baseline {}: {e:?}", against.display())));
 

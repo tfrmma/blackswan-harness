@@ -104,7 +104,9 @@ fn silent_reject_drops_the_rejected_execution_report_but_forwards_the_ack() {
         port_tx,
         vec![build_execution_report("0", "0"), build_execution_report("8", "8")],
     );
-    let exchange_port = port_rx.recv_timeout(Duration::from_secs(2)).expect("fake exchange bound");
+    let exchange_port = port_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("fake exchange bound");
 
     let listen_port = next_listen_port();
     let mut injector = FixFaultInjector::new(
@@ -114,19 +116,32 @@ fn silent_reject_drops_the_rejected_execution_report_but_forwards_the_ack() {
         Arc::new(FixSilentReject),
     );
 
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
     injector.arm(&ctx).expect("arm fix silent reject injector");
     std::thread::sleep(Duration::from_millis(50));
 
     let mut client = TcpStream::connect(("127.0.0.1", listen_port)).expect("connect to proxy");
-    client.write_all(&build_new_order_single("order-1")).expect("send order");
+    client
+        .write_all(&build_new_order_single("order-1"))
+        .expect("send order");
 
     let received = read_available_messages(&mut client, Duration::from_millis(500));
     injector.disarm().expect("disarm");
 
-    assert_eq!(received.len(), 1, "expected only the ack through, got {} messages", received.len());
+    assert_eq!(
+        received.len(),
+        1,
+        "expected only the ack through, got {} messages",
+        received.len()
+    );
     let parsed = blackswan_adapters::fix::parse(&received[0]).unwrap();
-    assert!(parsed.is(39, b"0"), "the message that arrived should be the New/ack, not the reject");
+    assert!(
+        parsed.is(39, b"0"),
+        "the message that arrived should be the New/ack, not the reject"
+    );
 }
 
 #[test]
@@ -136,7 +151,9 @@ fn ack_without_execution_drops_the_fill_but_forwards_the_ack() {
         port_tx,
         vec![build_execution_report("0", "0"), build_execution_report("2", "F")],
     );
-    let exchange_port = port_rx.recv_timeout(Duration::from_secs(2)).expect("fake exchange bound");
+    let exchange_port = port_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("fake exchange bound");
 
     let listen_port = next_listen_port();
     let mut injector = FixFaultInjector::new(
@@ -146,19 +163,32 @@ fn ack_without_execution_drops_the_fill_but_forwards_the_ack() {
         Arc::new(FixAckWithoutExecution),
     );
 
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
     injector.arm(&ctx).expect("arm fix ack-without-execution injector");
     std::thread::sleep(Duration::from_millis(50));
 
     let mut client = TcpStream::connect(("127.0.0.1", listen_port)).expect("connect to proxy");
-    client.write_all(&build_new_order_single("order-2")).expect("send order");
+    client
+        .write_all(&build_new_order_single("order-2"))
+        .expect("send order");
 
     let received = read_available_messages(&mut client, Duration::from_millis(500));
     injector.disarm().expect("disarm");
 
-    assert_eq!(received.len(), 1, "expected only the ack through, got {} messages", received.len());
+    assert_eq!(
+        received.len(),
+        1,
+        "expected only the ack through, got {} messages",
+        received.len()
+    );
     let parsed = blackswan_adapters::fix::parse(&received[0]).unwrap();
-    assert!(parsed.is(150, b"0"), "the message that arrived should be the New/ack, not the fill");
+    assert!(
+        parsed.is(150, b"0"),
+        "the message that arrived should be the New/ack, not the fill"
+    );
 }
 
 #[test]
@@ -166,7 +196,9 @@ fn rate_limit_throttle_drops_outbound_messages_past_threshold() {
     let (port_tx, port_rx) = std::sync::mpsc::channel();
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     spawn_fake_exchange_that_counts(port_tx, result_tx, Duration::from_millis(600));
-    let exchange_port = port_rx.recv_timeout(Duration::from_secs(2)).expect("fake exchange bound");
+    let exchange_port = port_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("fake exchange bound");
 
     let listen_port = next_listen_port();
     let mut injector = FixFaultInjector::new(
@@ -176,18 +208,28 @@ fn rate_limit_throttle_drops_outbound_messages_past_threshold() {
         Arc::new(FixRateLimitThrottle::new(2)),
     );
 
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
     injector.arm(&ctx).expect("arm fix rate limit throttle injector");
     std::thread::sleep(Duration::from_millis(50));
 
     let mut client = TcpStream::connect(("127.0.0.1", listen_port)).expect("connect to proxy");
     for i in 0..5 {
-        client.write_all(&build_new_order_single(&format!("order-{i}"))).expect("send order");
+        client
+            .write_all(&build_new_order_single(&format!("order-{i}")))
+            .expect("send order");
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let received_by_exchange = result_rx.recv_timeout(Duration::from_secs(2)).expect("fake exchange result");
+    let received_by_exchange = result_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("fake exchange result");
     injector.disarm().expect("disarm");
 
-    assert_eq!(received_by_exchange, 2, "expected only 2 of 5 orders to reach the exchange, threshold was 2");
+    assert_eq!(
+        received_by_exchange, 2,
+        "expected only 2 of 5 orders to reach the exchange, threshold was 2"
+    );
 }

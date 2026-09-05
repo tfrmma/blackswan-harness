@@ -47,7 +47,10 @@ fn cli_run_drives_a_real_fix_rate_limit_scenario_end_to_end() {
         count_tx.send(received).unwrap();
     });
 
-    let config_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/fix-rate-limit-throttle.toml");
+    let config_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/fix-rate-limit-throttle.toml"
+    );
     let trace_path = std::env::temp_dir().join("cli-integration-test-trace.json");
 
     let mut child = Command::new(cli_binary())
@@ -61,7 +64,9 @@ fn cli_run_drives_a_real_fix_rate_limit_scenario_end_to_end() {
 
     let mut client = TcpStream::connect(("127.0.0.1", listen_port)).expect("connect to cli-managed proxy");
     for i in 0..5 {
-        client.write_all(&build_new_order_single(&format!("order-{i}"))).expect("send order");
+        client
+            .write_all(&build_new_order_single(&format!("order-{i}")))
+            .expect("send order");
         std::thread::sleep(Duration::from_millis(300));
     }
     drop(client);
@@ -69,8 +74,13 @@ fn cli_run_drives_a_real_fix_rate_limit_scenario_end_to_end() {
     let status = child.wait().expect("wait for blackswan run to finish");
     assert!(status.success(), "blackswan run exited with {status:?}");
 
-    let received = count_rx.recv_timeout(Duration::from_secs(3)).expect("fake exchange result");
-    assert_eq!(received, 3, "threshold=3 in the example config should let exactly 3 of 5 orders through");
+    let received = count_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("fake exchange result");
+    assert_eq!(
+        received, 3,
+        "threshold=3 in the example config should let exactly 3 of 5 orders through"
+    );
 
     let trace_json = std::fs::read_to_string(&trace_path).expect("read saved trace");
     assert!(trace_json.contains("\"fault_id\": \"throttle\""));

@@ -19,9 +19,14 @@ fn xdp_packet_loss_drops_exactly_the_configured_fraction() {
     let sender = UdpSocket::bind("127.0.0.1:0").expect("bind sender");
 
     let mut injector = XdpPacketLossInjector::new("xdp-pktloss-test", "lo", 3);
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
 
-    injector.arm(&ctx).expect("arm xdp injector, needs root + CAP_BPF/CAP_NET_ADMIN");
+    injector
+        .arm(&ctx)
+        .expect("arm xdp injector, needs root + CAP_BPF/CAP_NET_ADMIN");
     assert!(injector.is_armed());
 
     let sent = 9u8;
@@ -42,7 +47,10 @@ fn xdp_packet_loss_drops_exactly_the_configured_fraction() {
 
     // drop_every_n = 3 over 9 packets drops exactly 3 (every 3rd), the
     // kernel program has zero randomness so this isn't a "roughly" check.
-    assert_eq!(received, 6, "expected exactly 3 of 9 packets dropped, got {received} received");
+    assert_eq!(
+        received, 6,
+        "expected exactly 3 of 9 packets dropped, got {received} received"
+    );
 
     // after disarm the fault must actually be off, not just flagged off
     for i in 0..sent {

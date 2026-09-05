@@ -35,7 +35,14 @@ pub struct XdpPartitionInjector {
 
 impl XdpPartitionInjector {
     pub fn new(id: impl Into<String>, iface: impl Into<String>, src_ip: Ipv4Addr, src_port: u16) -> Self {
-        Self { id: id.into(), iface: iface.into(), src_ip, src_port, bpf: None, armed: false }
+        Self {
+            id: id.into(),
+            iface: iface.into(),
+            src_ip,
+            src_port,
+            bpf: None,
+            armed: false,
+        }
     }
 
     fn ensure_loaded(&mut self) -> Result<(), HarnessError> {
@@ -43,8 +50,8 @@ impl XdpPartitionInjector {
             return Ok(());
         }
 
-        let mut bpf = Bpf::load(XDP_PARTITION_OBJ)
-            .map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
+        let mut bpf =
+            Bpf::load(XDP_PARTITION_OBJ).map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
 
         {
             let program: &mut Xdp = bpf
@@ -53,11 +60,11 @@ impl XdpPartitionInjector {
                     HarnessError::ArmFailed(self.id.clone(), format!("no program named {PROGRAM_NAME} in object"))
                 })?
                 .try_into()
-                .map_err(|e: aya::programs::ProgramError| {
-                    HarnessError::ArmFailed(self.id.clone(), e.to_string())
-                })?;
+                .map_err(|e: aya::programs::ProgramError| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
 
-            program.load().map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
+            program
+                .load()
+                .map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
             program
                 .attach(&self.iface, XdpFlags::default())
                 .map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;

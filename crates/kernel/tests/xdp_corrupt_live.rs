@@ -37,9 +37,14 @@ fn xdp_corruption_flips_exactly_one_byte_on_the_configured_fraction() {
     let sender = UdpSocket::bind("127.0.0.1:0").expect("bind sender");
 
     let mut injector = XdpCorruptionInjector::new("xdp-corrupt-test", "lo", 3, 60, MASK);
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
 
-    injector.arm(&ctx).expect("arm xdp corruption injector, needs root + CAP_BPF/CAP_NET_ADMIN");
+    injector
+        .arm(&ctx)
+        .expect("arm xdp corruption injector, needs root + CAP_BPF/CAP_NET_ADMIN");
     assert!(injector.is_armed());
 
     let payload = [FILL_BYTE; PAYLOAD_LEN];
@@ -64,11 +69,21 @@ fn xdp_corruption_flips_exactly_one_byte_on_the_configured_fraction() {
     // flipped byte, the rest should be untouched, none should be dropped
     for (i, diffs) in diffs_per_packet.iter().enumerate() {
         let expect_corrupted = (i + 1) % 3 == 0;
-        assert_ne!(*diffs, usize::MAX, "packet {i} never arrived, corruption shouldn't drop packets");
+        assert_ne!(
+            *diffs,
+            usize::MAX,
+            "packet {i} never arrived, corruption shouldn't drop packets"
+        );
         if expect_corrupted {
-            assert_eq!(*diffs, 1, "packet {i} (every 3rd) should have exactly one flipped byte, got {diffs}");
+            assert_eq!(
+                *diffs, 1,
+                "packet {i} (every 3rd) should have exactly one flipped byte, got {diffs}"
+            );
         } else {
-            assert_eq!(*diffs, 0, "packet {i} shouldn't be touched, got {diffs} differing bytes");
+            assert_eq!(
+                *diffs, 0,
+                "packet {i} shouldn't be touched, got {diffs} differing bytes"
+            );
         }
     }
 

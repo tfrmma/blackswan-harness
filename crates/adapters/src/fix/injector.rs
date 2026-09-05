@@ -21,7 +21,11 @@ impl FixFaultInjector {
         upstream_addr: impl Into<String>,
         adapter: Arc<dyn ProtocolAdapter>,
     ) -> Self {
-        Self { id: id.into(), proxy: FixProxy::new(listen_addr, upstream_addr, adapter), armed: false }
+        Self {
+            id: id.into(),
+            proxy: FixProxy::new(listen_addr, upstream_addr, adapter),
+            armed: false,
+        }
     }
 }
 

@@ -12,10 +12,26 @@ fn sample_scenario() -> Scenario {
         name: "pkt-loss-then-clock-skew".into(),
         seed: 777,
         steps: vec![
-            ScenarioStep { at_ns: 0, fault_id: "pkt-loss".into(), action: StepAction::Arm },
-            ScenarioStep { at_ns: 2_000, fault_id: "clock-skew".into(), action: StepAction::Arm },
-            ScenarioStep { at_ns: 5_000, fault_id: "pkt-loss".into(), action: StepAction::Disarm },
-            ScenarioStep { at_ns: 8_000, fault_id: "clock-skew".into(), action: StepAction::Disarm },
+            ScenarioStep {
+                at_ns: 0,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Arm,
+            },
+            ScenarioStep {
+                at_ns: 2_000,
+                fault_id: "clock-skew".into(),
+                action: StepAction::Arm,
+            },
+            ScenarioStep {
+                at_ns: 5_000,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Disarm,
+            },
+            ScenarioStep {
+                at_ns: 8_000,
+                fault_id: "clock-skew".into(),
+                action: StepAction::Disarm,
+            },
         ],
     }
 }

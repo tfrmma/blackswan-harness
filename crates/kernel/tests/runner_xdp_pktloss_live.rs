@@ -27,14 +27,24 @@ fn scenario_arms_real_xdp_fault_through_the_runner_and_teardown_disarms_it() {
     let scenario = Scenario {
         name: "runner-xdp-pktloss".into(),
         seed: 42,
-        steps: vec![ScenarioStep { at_ns: 0, fault_id: "xdp-pktloss".into(), action: StepAction::Arm }],
+        steps: vec![ScenarioStep {
+            at_ns: 0,
+            fault_id: "xdp-pktloss".into(),
+            action: StepAction::Arm,
+        }],
     };
     let schedule = ValidatedSchedule::validate(scenario).expect("well formed scenario");
 
     let mut injectors: HashMap<String, Box<dyn FaultInjector>> = HashMap::new();
-    injectors.insert("xdp-pktloss".into(), Box::new(XdpPacketLossInjector::new("xdp-pktloss", "lo", 3)));
+    injectors.insert(
+        "xdp-pktloss".into(),
+        Box::new(XdpPacketLossInjector::new("xdp-pktloss", "lo", 3)),
+    );
 
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 42 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 42,
+    };
 
     {
         let mut runner = Runner::new(&schedule, injectors, ctx).expect("runner setup");

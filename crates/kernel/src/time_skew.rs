@@ -74,7 +74,10 @@ impl FaultInjector for TimeSkewInjector {
         }
 
         let Some((program, args)) = self.argv.split_first() else {
-            return Err(HarnessError::ArmFailed(self.id.clone(), "argv is empty, nothing to launch".into()));
+            return Err(HarnessError::ArmFailed(
+                self.id.clone(),
+                "argv is empty, nothing to launch".into(),
+            ));
         };
 
         // built before fork, the pre_exec closure below runs between fork()

@@ -64,14 +64,26 @@ mod tests {
     use super::*;
 
     fn scenario_with(steps: Vec<ScenarioStep>) -> Scenario {
-        Scenario { name: "test".into(), seed: 1, steps }
+        Scenario {
+            name: "test".into(),
+            seed: 1,
+            steps,
+        }
     }
 
     #[test]
     fn accepts_well_formed_schedule() {
         let s = scenario_with(vec![
-            ScenarioStep { at_ns: 0, fault_id: "pkt-loss".into(), action: StepAction::Arm },
-            ScenarioStep { at_ns: 1000, fault_id: "pkt-loss".into(), action: StepAction::Disarm },
+            ScenarioStep {
+                at_ns: 0,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Arm,
+            },
+            ScenarioStep {
+                at_ns: 1000,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Disarm,
+            },
         ]);
         assert!(ValidatedSchedule::validate(s).is_ok());
     }
@@ -79,8 +91,16 @@ mod tests {
     #[test]
     fn rejects_out_of_order_steps() {
         let s = scenario_with(vec![
-            ScenarioStep { at_ns: 1000, fault_id: "pkt-loss".into(), action: StepAction::Arm },
-            ScenarioStep { at_ns: 500, fault_id: "pkt-loss".into(), action: StepAction::Disarm },
+            ScenarioStep {
+                at_ns: 1000,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Arm,
+            },
+            ScenarioStep {
+                at_ns: 500,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Disarm,
+            },
         ]);
         assert!(ValidatedSchedule::validate(s).is_err());
     }
@@ -88,8 +108,16 @@ mod tests {
     #[test]
     fn rejects_double_arm() {
         let s = scenario_with(vec![
-            ScenarioStep { at_ns: 0, fault_id: "pkt-loss".into(), action: StepAction::Arm },
-            ScenarioStep { at_ns: 100, fault_id: "pkt-loss".into(), action: StepAction::Arm },
+            ScenarioStep {
+                at_ns: 0,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Arm,
+            },
+            ScenarioStep {
+                at_ns: 100,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Arm,
+            },
         ]);
         assert!(ValidatedSchedule::validate(s).is_err());
     }

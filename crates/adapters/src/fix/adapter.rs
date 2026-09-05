@@ -19,15 +19,19 @@ impl ProtocolAdapter for FixSilentReject {
             return Ok(InterceptAction::Forward);
         }
 
-        let parsed = parse(&msg.bytes)
-            .map_err(|e| HarnessError::AdapterRejected(self.name().to_string(), format!("{e:?}")))?;
+        let parsed =
+            parse(&msg.bytes).map_err(|e| HarnessError::AdapterRejected(self.name().to_string(), format!("{e:?}")))?;
 
         let is_rejection = parsed.is(TAG_MSG_TYPE, MSG_TYPE_REJECT)
             || parsed.is(TAG_MSG_TYPE, MSG_TYPE_ORDER_CANCEL_REJECT)
             || (parsed.is(TAG_MSG_TYPE, MSG_TYPE_EXECUTION_REPORT)
                 && (parsed.is(TAG_ORD_STATUS, ORD_STATUS_REJECTED) || parsed.is(TAG_EXEC_TYPE, EXEC_TYPE_REJECTED)));
 
-        Ok(if is_rejection { InterceptAction::Drop } else { InterceptAction::Forward })
+        Ok(if is_rejection {
+            InterceptAction::Drop
+        } else {
+            InterceptAction::Forward
+        })
     }
 }
 
@@ -47,8 +51,8 @@ impl ProtocolAdapter for FixAckWithoutExecution {
             return Ok(InterceptAction::Forward);
         }
 
-        let parsed = parse(&msg.bytes)
-            .map_err(|e| HarnessError::AdapterRejected(self.name().to_string(), format!("{e:?}")))?;
+        let parsed =
+            parse(&msg.bytes).map_err(|e| HarnessError::AdapterRejected(self.name().to_string(), format!("{e:?}")))?;
 
         if !parsed.is(TAG_MSG_TYPE, MSG_TYPE_EXECUTION_REPORT) {
             return Ok(InterceptAction::Forward);
@@ -58,7 +62,11 @@ impl ProtocolAdapter for FixAckWithoutExecution {
             || parsed.is(TAG_ORD_STATUS, ORD_STATUS_PARTIALLY_FILLED)
             || parsed.is(TAG_ORD_STATUS, ORD_STATUS_FILLED);
 
-        Ok(if is_fill { InterceptAction::Drop } else { InterceptAction::Forward })
+        Ok(if is_fill {
+            InterceptAction::Drop
+        } else {
+            InterceptAction::Forward
+        })
     }
 }
 
@@ -75,7 +83,10 @@ pub struct FixRateLimitThrottle {
 
 impl FixRateLimitThrottle {
     pub fn new(threshold: u64) -> Self {
-        Self { threshold, count: AtomicU64::new(0) }
+        Self {
+            threshold,
+            count: AtomicU64::new(0),
+        }
     }
 }
 
@@ -90,7 +101,11 @@ impl ProtocolAdapter for FixRateLimitThrottle {
         }
 
         let seen = self.count.fetch_add(1, Ordering::SeqCst) + 1;
-        Ok(if seen > self.threshold { InterceptAction::Drop } else { InterceptAction::Forward })
+        Ok(if seen > self.threshold {
+            InterceptAction::Drop
+        } else {
+            InterceptAction::Forward
+        })
     }
 }
 
@@ -111,11 +126,17 @@ mod tests {
     }
 
     fn inbound(bytes: Vec<u8>) -> RawMessage {
-        RawMessage { bytes, direction: Direction::Inbound }
+        RawMessage {
+            bytes,
+            direction: Direction::Inbound,
+        }
     }
 
     fn outbound(bytes: Vec<u8>) -> RawMessage {
-        RawMessage { bytes, direction: Direction::Outbound }
+        RawMessage {
+            bytes,
+            direction: Direction::Outbound,
+        }
     }
 
     #[test]
@@ -158,7 +179,8 @@ mod tests {
         assert!(matches!(adapter.intercept(&msg()).unwrap(), InterceptAction::Forward)); // 1
         assert!(matches!(adapter.intercept(&msg()).unwrap(), InterceptAction::Forward)); // 2
         assert!(matches!(adapter.intercept(&msg()).unwrap(), InterceptAction::Drop)); // 3, over threshold
-        assert!(matches!(adapter.intercept(&msg()).unwrap(), InterceptAction::Drop)); // 4, still over
+        assert!(matches!(adapter.intercept(&msg()).unwrap(), InterceptAction::Drop));
+        // 4, still over
     }
 
     #[test]

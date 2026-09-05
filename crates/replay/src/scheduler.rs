@@ -14,7 +14,11 @@ pub struct Scheduler<'a> {
 
 impl<'a> Scheduler<'a> {
     pub fn new(schedule: &'a ValidatedSchedule, start_ns: u64) -> Self {
-        Self { schedule, clock: VirtualClock::new(start_ns), cursor: 0 }
+        Self {
+            schedule,
+            clock: VirtualClock::new(start_ns),
+            cursor: 0,
+        }
     }
 
     pub fn now_ns(&self) -> u64 {
@@ -30,9 +34,7 @@ impl<'a> Scheduler<'a> {
         let now = self.clock.now_ns();
         let start = self.cursor;
 
-        while self.cursor < self.schedule.steps().len()
-            && self.schedule.steps()[self.cursor].at_ns <= now
-        {
+        while self.cursor < self.schedule.steps().len() && self.schedule.steps()[self.cursor].at_ns <= now {
             self.cursor += 1;
         }
 
@@ -54,8 +56,16 @@ mod tests {
             name: "test".into(),
             seed: 1,
             steps: vec![
-                ScenarioStep { at_ns: 1_000, fault_id: "a".into(), action: StepAction::Arm },
-                ScenarioStep { at_ns: 5_000, fault_id: "a".into(), action: StepAction::Disarm },
+                ScenarioStep {
+                    at_ns: 1_000,
+                    fault_id: "a".into(),
+                    action: StepAction::Arm,
+                },
+                ScenarioStep {
+                    at_ns: 5_000,
+                    fault_id: "a".into(),
+                    action: StepAction::Disarm,
+                },
             ],
         };
         ValidatedSchedule::validate(scenario).unwrap()

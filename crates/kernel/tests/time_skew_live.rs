@@ -41,21 +41,35 @@ fn armed_child_actually_observes_the_configured_offset() {
         1_000,
     )
     .with_captured_stdout();
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
 
     injector.arm(&ctx).expect("arm time skew injector, needs root");
     assert!(injector.is_armed());
 
     let pid = injector.pid().expect("child should have a pid once armed");
-    assert!(std::path::Path::new(&format!("/proc/{pid}")).exists(), "child process should be alive");
+    assert!(
+        std::path::Path::new(&format!("/proc/{pid}")).exists(),
+        "child process should be alive"
+    );
 
     let mut stdout = injector.take_stdout().expect("stdout should be captured");
     let mut output = String::new();
     stdout.read_to_string(&mut output).expect("read child stdout");
 
     let mut lines = output.lines();
-    let child_mono: f64 = lines.next().expect("first line: monotonic").parse().expect("parse monotonic");
-    let child_boot: f64 = lines.next().expect("second line: boottime").parse().expect("parse boottime");
+    let child_mono: f64 = lines
+        .next()
+        .expect("first line: monotonic")
+        .parse()
+        .expect("parse monotonic");
+    let child_boot: f64 = lines
+        .next()
+        .expect("second line: boottime")
+        .parse()
+        .expect("parse boottime");
 
     injector.disarm().expect("disarm time skew injector");
     assert!(!injector.is_armed());
@@ -82,13 +96,19 @@ fn armed_child_actually_observes_the_configured_offset() {
 #[ignore]
 fn disarm_terminates_a_still_running_child() {
     let mut injector = TimeSkewInjector::new("time-skew-kill-test", vec!["sleep".into(), "100".into()], 0, 0);
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
 
     injector.arm(&ctx).expect("arm time skew injector, needs root");
     let pid = injector.pid().expect("child should have a pid once armed");
 
     std::thread::sleep(Duration::from_millis(100));
-    assert!(std::path::Path::new(&format!("/proc/{pid}")).exists(), "sleep 100 should still be running");
+    assert!(
+        std::path::Path::new(&format!("/proc/{pid}")).exists(),
+        "sleep 100 should still be running"
+    );
 
     injector.disarm().expect("disarm should kill the still-running sleep");
     assert!(
@@ -97,19 +117,26 @@ fn disarm_terminates_a_still_running_child() {
     );
 
     // safe to call twice, matches the trait contract
-    injector.disarm().expect("second disarm should be a no-op, not an error");
+    injector
+        .disarm()
+        .expect("second disarm should be a no-op, not an error");
 }
 
 #[test]
 #[ignore]
 fn arm_is_idempotent() {
     let mut injector = TimeSkewInjector::new("time-skew-idempotent-test", vec!["sleep".into(), "100".into()], 0, 0);
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
 
     injector.arm(&ctx).expect("first arm");
     let pid_first = injector.pid();
 
-    injector.arm(&ctx).expect("second arm should be a no-op, not spawn another child");
+    injector
+        .arm(&ctx)
+        .expect("second arm should be a no-op, not spawn another child");
     let pid_second = injector.pid();
 
     assert_eq!(pid_first, pid_second, "arming twice shouldn't spawn a second process");

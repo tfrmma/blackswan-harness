@@ -29,13 +29,7 @@ pub struct XdpCorruptionInjector {
 }
 
 impl XdpCorruptionInjector {
-    pub fn new(
-        id: impl Into<String>,
-        iface: impl Into<String>,
-        corrupt_every_n: u32,
-        offset: u32,
-        mask: u8,
-    ) -> Self {
+    pub fn new(id: impl Into<String>, iface: impl Into<String>, corrupt_every_n: u32, offset: u32, mask: u8) -> Self {
         Self {
             id: id.into(),
             iface: iface.into(),
@@ -52,8 +46,8 @@ impl XdpCorruptionInjector {
             return Ok(());
         }
 
-        let mut bpf = Bpf::load(XDP_CORRUPT_OBJ)
-            .map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
+        let mut bpf =
+            Bpf::load(XDP_CORRUPT_OBJ).map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
 
         {
             let program: &mut Xdp = bpf
@@ -62,11 +56,11 @@ impl XdpCorruptionInjector {
                     HarnessError::ArmFailed(self.id.clone(), format!("no program named {PROGRAM_NAME} in object"))
                 })?
                 .try_into()
-                .map_err(|e: aya::programs::ProgramError| {
-                    HarnessError::ArmFailed(self.id.clone(), e.to_string())
-                })?;
+                .map_err(|e: aya::programs::ProgramError| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
 
-            program.load().map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
+            program
+                .load()
+                .map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;
             program
                 .attach(&self.iface, XdpFlags::default())
                 .map_err(|e| HarnessError::ArmFailed(self.id.clone(), e.to_string()))?;

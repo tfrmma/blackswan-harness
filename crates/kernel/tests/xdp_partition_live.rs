@@ -22,15 +22,23 @@ fn xdp_partition_blocks_only_the_configured_peer_port() {
     let other_peer = UdpSocket::bind("127.0.0.1:0").expect("bind other peer");
     let blocked_port = blocked_peer.local_addr().unwrap().port();
 
-    let mut injector =
-        XdpPartitionInjector::new("xdp-partition-test", "lo", Ipv4Addr::new(127, 0, 0, 1), blocked_port);
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let mut injector = XdpPartitionInjector::new("xdp-partition-test", "lo", Ipv4Addr::new(127, 0, 0, 1), blocked_port);
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
 
-    injector.arm(&ctx).expect("arm xdp partition injector, needs root + CAP_BPF/CAP_NET_ADMIN");
+    injector
+        .arm(&ctx)
+        .expect("arm xdp partition injector, needs root + CAP_BPF/CAP_NET_ADMIN");
     assert!(injector.is_armed());
 
-    blocked_peer.send_to(b"from-blocked-peer", recv_addr).expect("send from blocked peer");
-    other_peer.send_to(b"from-other-peer", recv_addr).expect("send from other peer");
+    blocked_peer
+        .send_to(b"from-blocked-peer", recv_addr)
+        .expect("send from blocked peer");
+    other_peer
+        .send_to(b"from-other-peer", recv_addr)
+        .expect("send from other peer");
 
     let mut buf = [0u8; 64];
     let mut received = Vec::new();
@@ -41,12 +49,23 @@ fn xdp_partition_blocks_only_the_configured_peer_port() {
     injector.disarm().expect("disarm xdp partition injector");
     assert!(!injector.is_armed());
 
-    assert_eq!(received.len(), 1, "exactly one peer's packet should have gotten through, got {received:?}");
-    assert_eq!(received[0], "from-other-peer", "the non-blocked peer's packet should be the one that arrived");
+    assert_eq!(
+        received.len(),
+        1,
+        "exactly one peer's packet should have gotten through, got {received:?}"
+    );
+    assert_eq!(
+        received[0], "from-other-peer",
+        "the non-blocked peer's packet should be the one that arrived"
+    );
 
     // after disarm, both peers should reach the receiver
-    blocked_peer.send_to(b"from-blocked-peer", recv_addr).expect("send from blocked peer");
-    other_peer.send_to(b"from-other-peer", recv_addr).expect("send from other peer");
+    blocked_peer
+        .send_to(b"from-blocked-peer", recv_addr)
+        .expect("send from blocked peer");
+    other_peer
+        .send_to(b"from-other-peer", recv_addr)
+        .expect("send from other peer");
 
     let mut received_after = 0;
     while receiver.recv(&mut buf).is_ok() {

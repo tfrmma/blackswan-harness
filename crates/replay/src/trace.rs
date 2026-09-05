@@ -22,7 +22,11 @@ pub struct Trace {
 
 impl Trace {
     pub fn new(scenario_name: impl Into<String>, seed: u64) -> Self {
-        Self { scenario_name: scenario_name.into(), seed, events: Vec::new() }
+        Self {
+            scenario_name: scenario_name.into(),
+            seed,
+            events: Vec::new(),
+        }
     }
 
     pub fn record(&mut self, step: ScenarioStep, wall_ns: u64) {
@@ -30,8 +34,7 @@ impl Trace {
     }
 
     pub fn save(&self, path: &Path) -> Result<(), HarnessError> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| HarnessError::InvalidScenario(e.to_string()))?;
+        let json = serde_json::to_string_pretty(self).map_err(|e| HarnessError::InvalidScenario(e.to_string()))?;
         let mut f = std::fs::File::create(path)?;
         f.write_all(json.as_bytes())?;
         Ok(())
@@ -48,7 +51,11 @@ impl Trace {
     // faithful.
     pub fn matches_schedule(&self, other: &Trace) -> bool {
         self.seed == other.seed
-            && self.events.iter().map(|e| &e.step).eq(other.events.iter().map(|e| &e.step))
+            && self
+                .events
+                .iter()
+                .map(|e| &e.step)
+                .eq(other.events.iter().map(|e| &e.step))
     }
 }
 
@@ -70,7 +77,11 @@ mod tests {
         let path = temp_path("roundtrip");
         let mut trace = Trace::new("smoke-test", 42);
         trace.record(
-            ScenarioStep { at_ns: 0, fault_id: "pkt-loss".into(), action: StepAction::Arm },
+            ScenarioStep {
+                at_ns: 0,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Arm,
+            },
             1_000,
         );
 
@@ -86,20 +97,32 @@ mod tests {
     fn matches_schedule_ignores_wall_time_but_not_seed() {
         let mut a = Trace::new("s", 1);
         a.record(
-            ScenarioStep { at_ns: 0, fault_id: "x".into(), action: StepAction::Arm },
+            ScenarioStep {
+                at_ns: 0,
+                fault_id: "x".into(),
+                action: StepAction::Arm,
+            },
             100,
         );
 
         let mut b = Trace::new("s", 1);
         b.record(
-            ScenarioStep { at_ns: 0, fault_id: "x".into(), action: StepAction::Arm },
+            ScenarioStep {
+                at_ns: 0,
+                fault_id: "x".into(),
+                action: StepAction::Arm,
+            },
             999_999, // different wall time, same schedule
         );
         assert!(a.matches_schedule(&b));
 
         let mut c = Trace::new("s", 2); // different seed
         c.record(
-            ScenarioStep { at_ns: 0, fault_id: "x".into(), action: StepAction::Arm },
+            ScenarioStep {
+                at_ns: 0,
+                fault_id: "x".into(),
+                action: StepAction::Arm,
+            },
             100,
         );
         assert!(!a.matches_schedule(&c));

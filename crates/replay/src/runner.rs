@@ -32,7 +32,11 @@ impl<'a> Runner<'a> {
                 )));
             }
         }
-        Ok(Self { schedule, injectors, ctx })
+        Ok(Self {
+            schedule,
+            injectors,
+            ctx,
+        })
     }
 
     // Drives the schedule to completion as fast as possible, calling
@@ -159,7 +163,10 @@ mod tests {
     }
 
     fn ctx() -> FaultContext {
-        FaultContext { clock: Arc::new(SystemClock), seed: 1 }
+        FaultContext {
+            clock: Arc::new(SystemClock),
+            seed: 1,
+        }
     }
 
     #[test]
@@ -195,8 +202,16 @@ mod tests {
             name: "test".into(),
             seed: 1,
             steps: vec![
-                ScenarioStep { at_ns: 1_000, fault_id: "pkt-loss".into(), action: StepAction::Arm },
-                ScenarioStep { at_ns: 5_000, fault_id: "pkt-loss".into(), action: StepAction::Disarm },
+                ScenarioStep {
+                    at_ns: 1_000,
+                    fault_id: "pkt-loss".into(),
+                    action: StepAction::Arm,
+                },
+                ScenarioStep {
+                    at_ns: 5_000,
+                    fault_id: "pkt-loss".into(),
+                    action: StepAction::Disarm,
+                },
             ],
         };
         let schedule = ValidatedSchedule::validate(scenario).unwrap();
@@ -228,10 +243,18 @@ mod tests {
             .map(|i| ScenarioStep {
                 at_ns: i * 5_000_000,
                 fault_id: "pkt-loss".into(),
-                action: if i % 2 == 0 { StepAction::Arm } else { StepAction::Disarm },
+                action: if i % 2 == 0 {
+                    StepAction::Arm
+                } else {
+                    StepAction::Disarm
+                },
             })
             .collect();
-        let scenario = Scenario { name: "test".into(), seed: 1, steps };
+        let scenario = Scenario {
+            name: "test".into(),
+            seed: 1,
+            steps,
+        };
         let schedule = ValidatedSchedule::validate(scenario).unwrap();
 
         let mut injectors: HashMap<String, Box<dyn FaultInjector>> = HashMap::new();
@@ -265,7 +288,11 @@ mod tests {
         let scenario = Scenario {
             name: "test".into(),
             seed: 1,
-            steps: vec![ScenarioStep { at_ns: 0, fault_id: "pkt-loss".into(), action: StepAction::Arm }],
+            steps: vec![ScenarioStep {
+                at_ns: 0,
+                fault_id: "pkt-loss".into(),
+                action: StepAction::Arm,
+            }],
         };
         let schedule = ValidatedSchedule::validate(scenario).unwrap();
 
@@ -279,6 +306,10 @@ mod tests {
             assert_eq!(disarm_calls.load(Ordering::SeqCst), 0);
         } // runner dropped here
 
-        assert_eq!(disarm_calls.load(Ordering::SeqCst), 1, "drop should have disarmed the still-armed injector");
+        assert_eq!(
+            disarm_calls.load(Ordering::SeqCst),
+            1,
+            "drop should have disarmed the still-armed injector"
+        );
     }
 }

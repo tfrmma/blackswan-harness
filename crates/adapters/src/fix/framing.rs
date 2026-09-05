@@ -33,8 +33,7 @@ pub fn find_complete_message(buf: &[u8]) -> Result<Option<usize>, ParseError> {
         return Ok(None); // BodyLength not fully received yet
     };
 
-    let body_length_str =
-        std::str::from_utf8(&rest[2..tag9_end_rel]).map_err(|_| ParseError::MalformedTag)?;
+    let body_length_str = std::str::from_utf8(&rest[2..tag9_end_rel]).map_err(|_| ParseError::MalformedTag)?;
     let body_length: usize = body_length_str.parse().map_err(|_| ParseError::MalformedTag)?;
 
     let header_len = tag8_end + 1 + tag9_end_rel + 1; // through the SOH ending tag 9

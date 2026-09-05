@@ -47,9 +47,14 @@ fn tight_limit_oom_kills_the_target_process() {
         8 * 1024 * 1024, // 8MB, well under the 64MB the script tries to touch
         PressureMode::Hard,
     );
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
 
-    injector.arm(&ctx).expect("arm cgroup memory pressure injector, needs root");
+    injector
+        .arm(&ctx)
+        .expect("arm cgroup memory pressure injector, needs root");
     assert!(injector.is_armed());
 
     let status = child.wait().expect("wait on child");
@@ -74,9 +79,14 @@ fn disarm_before_allocation_lets_the_process_survive() {
         8 * 1024 * 1024,
         PressureMode::Hard,
     );
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
 
-    injector.arm(&ctx).expect("arm cgroup memory pressure injector, needs root");
+    injector
+        .arm(&ctx)
+        .expect("arm cgroup memory pressure injector, needs root");
     // disarm well before the script's 500ms sleep elapses and it actually
     // tries to allocate, this is the case that actually exercises whether
     // disarm's limit-file write takes effect in time
@@ -84,5 +94,8 @@ fn disarm_before_allocation_lets_the_process_survive() {
     assert!(!injector.is_armed());
 
     let status = child.wait().expect("wait on child");
-    assert!(status.success(), "expected the allocator to survive after disarm, got status {status:?}");
+    assert!(
+        status.success(),
+        "expected the allocator to survive after disarm, got status {status:?}"
+    );
 }

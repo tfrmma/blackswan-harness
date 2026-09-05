@@ -29,7 +29,9 @@ pub struct VirtualClock {
 
 impl VirtualClock {
     pub fn new(start_ns: u64) -> Self {
-        Self { ns: AtomicU64::new(start_ns) }
+        Self {
+            ns: AtomicU64::new(start_ns),
+        }
     }
 
     pub fn advance(&self, delta_ns: u64) {
