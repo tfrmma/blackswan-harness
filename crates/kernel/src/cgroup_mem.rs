@@ -39,7 +39,14 @@ pub struct CgroupMemoryPressureInjector {
 
 impl CgroupMemoryPressureInjector {
     pub fn new(id: impl Into<String>, pid: u32, limit_bytes: u64, mode: PressureMode) -> Self {
-        Self { id: id.into(), pid, limit_bytes, mode, setup: None, armed: false }
+        Self {
+            id: id.into(),
+            pid,
+            limit_bytes,
+            mode,
+            setup: None,
+            armed: false,
+        }
     }
 
     fn locate_subtree(&self) -> Result<PathBuf, HarnessError> {
@@ -49,13 +56,30 @@ impl CgroupMemoryPressureInjector {
         }
 
         let our_cgroup = fs::read_to_string("/proc/self/cgroup").map_err(HarnessError::Io)?;
-        let v2_path = our_cgroup
-            .lines()
-            .find_map(|l| l.strip_prefix("0::"))
-            .ok_or_else(|| {
-                HarnessError::ArmFailed(self.id.clone(), "no v2 cgroup entry in /proc/self/cgroup".into())
-            })?;
-        let v2_root = PathBuf::from("/sys/fs/cgroup/unified").join(v2_path.trim_start_matches('/'));
+        let v2_path = our_cgroup.lines().find_map(|l| l.strip_prefix("0::")).ok_or_else(|| {
+            HarnessError::ArmFailed(self.id.clone(), "no v2 cgroup entry in /proc/self/cgroup".into())
+        })?;
+        let v2_path = v2_path.trim_start_matches('/');
+
+        // Pure cgroup v2 unified mode, the default on virtually every
+        // modern distro since ~2021, including standard GitHub Actions
+        // runners: the hierarchy is mounted directly at /sys/fs/cgroup,
+        // marked by cgroup.controllers at that root. This is the common
+        // case, checked first. A real CI run on a standard runner is what
+        // caught this, this function originally only knew the hybrid
+        // layout below, which is how the sandbox this was developed in
+        // happens to be configured, not the standard layout.
+        if PathBuf::from("/sys/fs/cgroup/cgroup.controllers").exists() {
+            let v2_root = PathBuf::from("/sys/fs/cgroup").join(v2_path);
+            if v2_root.join("memory.max").exists() {
+                return Ok(v2_root);
+            }
+        }
+
+        // Hybrid mode with the unified hierarchy mounted at a separate
+        // path instead of /sys/fs/cgroup directly. Less common, but real,
+        // kept as a fallback rather than removed.
+        let v2_root = PathBuf::from("/sys/fs/cgroup/unified").join(v2_path);
         if v2_root.join("memory.max").exists() {
             return Ok(v2_root);
         }
