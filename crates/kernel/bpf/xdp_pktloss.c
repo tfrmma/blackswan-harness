@@ -7,15 +7,23 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
-// libbpf 1.x dropped struct bpf_map_def from its own headers (BTF-only maps
-// as of v1.0), so it's declared here directly, same layout it's always had.
-// Using the legacy form on purpose: it needs zero BTF, which sidesteps a
-// real incompatibility between clang 18's BTF encoding and the aya-obj
-// version paired with the aya release this toolchain can actually build
-// (verified: the modern SEC(".maps") + BTF form fails to parse with
-// "error parsing ELF data", the legacy form parses cleanly, see the commit
-// history / PR description for the actual verifier output).
-struct bpf_map_def {
+// Legacy map form (no BTF) on purpose: it sidesteps a real incompatibility
+// between clang 18's BTF encoding and the aya-obj version paired with the
+// aya release this toolchain can actually build (verified: the modern
+// SEC(".maps") + BTF form fails to parse with "error parsing ELF data",
+// this legacy form parses cleanly).
+//
+// Named blackswan_bpf_map_def rather than the traditional bpf_map_def on
+// purpose: some libbpf-dev versions still declare struct bpf_map_def in
+// bpf_helpers.h (pre-1.0-style), others dropped it entirely, and declaring
+// our own under that name collides with the former. Found this the hard
+// way, a real CI failure on a runner whose libbpf-dev still has it,
+// "redefinition of bpf_map_def", not something the original dev sandbox's
+// newer libbpf-dev ever surfaced. The struct's name is a source-level
+// identifier only, it doesn't appear in the compiled ELF, so renaming it
+// is free, aya-obj reads the byte layout of each map variable from the
+// maps section, not this type name.
+struct blackswan_bpf_map_def {
     unsigned int type;
     unsigned int key_size;
     unsigned int value_size;
@@ -27,7 +35,7 @@ struct bpf_map_def {
 // entirely. Simpler than a probability threshold and, unlike a probability
 // check, gives an exact drop count for a given packet count, which is what
 // the replay comparison in a test scenario actually wants to assert on.
-struct bpf_map_def SEC("maps") drop_every_n = {
+struct blackswan_bpf_map_def SEC("maps") drop_every_n = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(__u32),
     .value_size = sizeof(__u32),
@@ -41,7 +49,7 @@ struct bpf_map_def SEC("maps") drop_every_n = {
 // project is built around. __sync_fetch_and_add lowers to a real BPF atomic
 // instruction, supported since kernel 5.12 for this map type, costs a bit
 // more than the per-CPU version but the correctness is worth it here.
-struct bpf_map_def SEC("maps") packet_count = {
+struct blackswan_bpf_map_def SEC("maps") packet_count = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(__u32),
     .value_size = sizeof(__u64),
