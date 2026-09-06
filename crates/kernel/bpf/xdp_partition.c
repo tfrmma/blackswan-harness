@@ -19,7 +19,7 @@
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 
-struct bpf_map_def {
+struct blackswan_bpf_map_def {
     unsigned int type;
     unsigned int key_size;
     unsigned int value_size;
@@ -27,7 +27,7 @@ struct bpf_map_def {
     unsigned int map_flags;
 };
 
-struct bpf_map_def SEC("maps") partition_enabled = {
+struct blackswan_bpf_map_def SEC("maps") partition_enabled = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(__u32),
     .value_size = sizeof(__u32),
@@ -35,7 +35,7 @@ struct bpf_map_def SEC("maps") partition_enabled = {
 };
 
 // network byte order, same as ip->saddr
-struct bpf_map_def SEC("maps") partition_src_ip = {
+struct blackswan_bpf_map_def SEC("maps") partition_src_ip = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(__u32),
     .value_size = sizeof(__u32),
@@ -43,7 +43,7 @@ struct bpf_map_def SEC("maps") partition_src_ip = {
 };
 
 // host byte order, 0 means match any source port once the IP matches
-struct bpf_map_def SEC("maps") partition_src_port = {
+struct blackswan_bpf_map_def SEC("maps") partition_src_port = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(__u32),
     .value_size = sizeof(__u32),
