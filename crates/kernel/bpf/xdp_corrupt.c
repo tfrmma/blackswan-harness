@@ -10,7 +10,7 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
-struct bpf_map_def {
+struct blackswan_bpf_map_def {
     unsigned int type;
     unsigned int key_size;
     unsigned int value_size;
@@ -19,7 +19,7 @@ struct bpf_map_def {
 };
 
 // 0 disables corruption entirely, N corrupts every Nth packet.
-struct bpf_map_def SEC("maps") corrupt_every_n = {
+struct blackswan_bpf_map_def SEC("maps") corrupt_every_n = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(__u32),
     .value_size = sizeof(__u32),
@@ -30,7 +30,7 @@ struct bpf_map_def SEC("maps") corrupt_every_n = {
 // before use, both so it stays inside any packet XDP will realistically see
 // and because the verifier needs a provably bounded value here, it can't
 // reason about an arbitrary u32 loaded from a map.
-struct bpf_map_def SEC("maps") corrupt_offset = {
+struct blackswan_bpf_map_def SEC("maps") corrupt_offset = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(__u32),
     .value_size = sizeof(__u32),
@@ -38,7 +38,7 @@ struct bpf_map_def SEC("maps") corrupt_offset = {
 };
 
 // XOR mask applied to the byte at corrupt_offset, only the low 8 bits used.
-struct bpf_map_def SEC("maps") corrupt_mask = {
+struct blackswan_bpf_map_def SEC("maps") corrupt_mask = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(__u32),
     .value_size = sizeof(__u32),
@@ -48,7 +48,7 @@ struct bpf_map_def SEC("maps") corrupt_mask = {
 // Own counter, deliberately not shared with xdp_pktloss.c's, these are
 // separate programs with independent moduli and shouldn't interfere with
 // each other's determinism if both ever end up loaded side by side.
-struct bpf_map_def SEC("maps") packet_count = {
+struct blackswan_bpf_map_def SEC("maps") packet_count = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(__u32),
     .value_size = sizeof(__u64),
