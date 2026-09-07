@@ -57,6 +57,41 @@ jobs:
         run: cargo build --workspace --verbose
       - name: unit and integration tests (no elevated privilege needed)
         run: cargo test --workspace --verbose
+      - name: DEBUG cgroup environment (temporary, remove after diagnosis)
+        run: |
+          echo "=== id ==="
+          id
+          echo "=== /proc/self/cgroup ==="
+          cat /proc/self/cgroup
+          echo "=== cgroup filesystem type ==="
+          stat -fc %T /sys/fs/cgroup
+          echo "=== cgroup.controllers at true root ==="
+          cat /sys/fs/cgroup/cgroup.controllers 2>&1
+          echo "=== cgroup.subtree_control at true root ==="
+          cat /sys/fs/cgroup/cgroup.subtree_control 2>&1
+          OWNCG=$(grep '^0::' /proc/self/cgroup | cut -d: -f3)
+          echo "=== our own cgroup path: $OWNCG ==="
+          echo "=== walking up the hierarchy, subtree_control at each level ==="
+          PARTS=$(echo "$OWNCG" | tr '/' '\n' | grep -v '^$')
+          CURPATH=""
+          for p in $PARTS; do
+            CURPATH="$CURPATH/$p"
+            echo "--- /sys/fs/cgroup$CURPATH/cgroup.subtree_control ---"
+            cat "/sys/fs/cgroup$CURPATH/cgroup.subtree_control" 2>&1
+          done
+          echo "=== controllers available at our own level ==="
+          cat "/sys/fs/cgroup${OWNCG}/cgroup.controllers" 2>&1
+          echo "=== can we create a test child cgroup? ==="
+          sudo mkdir -p "/sys/fs/cgroup${OWNCG}/blackswan-debug-test" && echo "mkdir OK" || echo "mkdir FAILED"
+          echo "=== does the child have memory.max ==="
+          ls -la "/sys/fs/cgroup${OWNCG}/blackswan-debug-test/" 2>&1
+          echo "=== try writing memory.max directly, as root ==="
+          sudo sh -c "echo 8388608 > /sys/fs/cgroup${OWNCG}/blackswan-debug-test/memory.max" && echo "WRITE OK" || echo "WRITE FAILED"
+          echo "=== enabling memory in subtree_control at our own level, as root ==="
+          sudo sh -c "echo +memory > /sys/fs/cgroup${OWNCG}/cgroup.subtree_control" 2>&1 && echo "enable OK" || echo "enable FAILED"
+          echo "=== retry write after enabling ==="
+          sudo sh -c "echo 8388608 > /sys/fs/cgroup${OWNCG}/blackswan-debug-test/memory.max" && echo "WRITE OK 2nd try" || echo "WRITE FAILED 2nd try"
+          sudo rmdir "/sys/fs/cgroup${OWNCG}/blackswan-debug-test" 2>&1
       - name: privileged kernel tests
         run: sudo -E env "PATH=$PATH" cargo test -p blackswan-kernel -- --ignored --test-threads=1
 
@@ -71,7 +106,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang libbpf-dev
       - name: build the cli
         run: cargo build -p blackswan-cli
-        
       - name: run the reference scenario, save a baseline trace
         run: |
           ./target/debug/blackswan run \
