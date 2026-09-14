@@ -105,16 +105,41 @@ impl CgroupMemoryPressureInjector {
             (false, PressureMode::Soft) => ("memory.high", "max"),
         };
 
-        let child = subtree.join(format!("blackswan-{}", self.id));
+        // v2 only: place the fault's cgroup as a *sibling* of `subtree`
+        // (our own process's cgroup) rather than nested inside it.
+        // `subtree` almost always has member processes of its own (us, at
+        // minimum), and cgroup v2's no internal process constraint means a
+        // cgroup with member processes can never enable a controller in its
+        // own cgroup.subtree_control, so nesting a child directly under it
+        // and trying to delegate +memory there is a guaranteed dead end.
+        // Confirmed directly on two independent real machines (a GitHub
+        // Actions hosted runner and WSL2 with systemd), not assumed, see
+        // the README's Known limitations. `subtree`'s parent, by contrast,
+        // almost always already has +memory in its own subtree_control:
+        // that's the only way `subtree` itself ended up with memory.max in
+        // the first place, and delegation from a parent applies to every
+        // child under it, present or future, no extra write needed. Stay
+        // put if `subtree` already *is* the v2 mount root, nowhere to walk
+        // up to, and the root cgroup is exempt from the constraint anyway.
+        let v2_mount_roots = [PathBuf::from("/sys/fs/cgroup"), PathBuf::from("/sys/fs/cgroup/unified")];
+        let parent_dir = if is_v1 || v2_mount_roots.contains(&subtree) {
+            subtree.clone()
+        } else {
+            subtree.parent().map(PathBuf::from).unwrap_or_else(|| subtree.clone())
+        };
+
+        let child = parent_dir.join(format!("blackswan-{}", self.id));
         fs::create_dir_all(&child).map_err(|e| {
             HarnessError::ArmFailed(self.id.clone(), format!("creating cgroup {}: {e}", child.display()))
         })?;
 
-        if !is_v1 {
-            // memory controller has to be enabled in the parent's
-            // subtree_control before a v2 child's memory.max/high means
-            // anything, best effort, some setups delegate it pre-enabled
-            let _ = fs::write(subtree.join("cgroup.subtree_control"), "+memory");
+        if !is_v1 && !child.join(limit_file).exists() {
+            // parent_dir didn't already have +memory delegated to it, one
+            // more best-effort attempt in case parent_dir itself is free of
+            // member processes even though it wasn't the common case above,
+            // the actual write in arm() below is what surfaces a real
+            // failure if this doesn't pan out either
+            let _ = fs::write(parent_dir.join("cgroup.subtree_control"), "+memory");
         }
 
         fs::write(child.join("cgroup.procs"), self.pid.to_string()).map_err(|e| {
