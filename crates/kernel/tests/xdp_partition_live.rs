@@ -122,14 +122,27 @@ fn xdp_partition_never_drops_a_non_initial_fragment_on_byte_collision() {
     other_payload[collision_offset..collision_offset + 2].copy_from_slice(&blocked_port.to_be_bytes());
     let blocked_payload = vec![0xCDu8; collision_offset + 400];
 
-    let mut injector =
-        XdpPartitionInjector::new("xdp-partition-frag-test", "lo", Ipv4Addr::new(127, 0, 0, 1), blocked_port);
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
-    injector.arm(&ctx).expect("arm xdp partition injector, needs root + CAP_BPF/CAP_NET_ADMIN");
+    let mut injector = XdpPartitionInjector::new(
+        "xdp-partition-frag-test",
+        "lo",
+        Ipv4Addr::new(127, 0, 0, 1),
+        blocked_port,
+    );
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
+    injector
+        .arm(&ctx)
+        .expect("arm xdp partition injector, needs root + CAP_BPF/CAP_NET_ADMIN");
     assert!(injector.is_armed());
 
-    blocked_peer.send_to(&blocked_payload, recv_addr).expect("send fragmented payload, blocked peer");
-    other_peer.send_to(&other_payload, recv_addr).expect("send fragmented payload, other peer, colliding fragment");
+    blocked_peer
+        .send_to(&blocked_payload, recv_addr)
+        .expect("send fragmented payload, blocked peer");
+    other_peer
+        .send_to(&other_payload, recv_addr)
+        .expect("send fragmented payload, other peer, colliding fragment");
 
     let mut buf = vec![0u8; 8192];
     let mut received = Vec::new();
@@ -139,7 +152,11 @@ fn xdp_partition_never_drops_a_non_initial_fragment_on_byte_collision() {
 
     injector.disarm().expect("disarm xdp partition injector");
 
-    assert_eq!(received.len(), 1, "only the non-blocked peer's fragmented datagram should reassemble and arrive");
+    assert_eq!(
+        received.len(),
+        1,
+        "only the non-blocked peer's fragmented datagram should reassemble and arrive"
+    );
     assert_eq!(
         received[0], other_payload,
         "delivered datagram must be byte exact, a dropped non-initial fragment corrupts reassembly"
@@ -165,7 +182,11 @@ fn xdp_partition_never_drops_a_non_initial_fragment_on_byte_collision() {
 fn ip_checksum(header: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     for chunk in header.chunks(2) {
-        let word = if chunk.len() == 2 { u16::from_be_bytes([chunk[0], chunk[1]]) } else { u16::from_be_bytes([chunk[0], 0]) };
+        let word = if chunk.len() == 2 {
+            u16::from_be_bytes([chunk[0], chunk[1]])
+        } else {
+            u16::from_be_bytes([chunk[0], 0])
+        };
         sum += word as u32;
     }
     while sum >> 16 != 0 {
@@ -223,12 +244,19 @@ fn open_raw_socket(ifindex: u32, rcv_timeout: Option<Duration>) -> RawFd {
     addr.sll_protocol = ETH_P_ALL.to_be();
     addr.sll_ifindex = ifindex as i32;
     let ret = unsafe {
-        libc::bind(fd, &addr as *const _ as *const libc::sockaddr, std::mem::size_of::<libc::sockaddr_ll>() as u32)
+        libc::bind(
+            fd,
+            &addr as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_ll>() as u32,
+        )
     };
     assert_eq!(ret, 0, "bind AF_PACKET socket to interface failed");
 
     if let Some(timeout) = rcv_timeout {
-        let tv = libc::timeval { tv_sec: timeout.as_secs() as libc::time_t, tv_usec: timeout.subsec_micros() as i64 };
+        let tv = libc::timeval {
+            tv_sec: timeout.as_secs() as libc::time_t,
+            tv_usec: timeout.subsec_micros() as i64,
+        };
         let ret = unsafe {
             libc::setsockopt(
                 fd,
@@ -293,10 +321,19 @@ fn vlan_tag_peeling_matches_or_passes(vlan_ids: &[u16]) {
     let blocked_marker = b"BLOCKED-VLAN-FRAG-MARKER-9f3a";
     let other_marker = b"ALLOWED-VLAN-FRAG-MARKER-9f3a";
 
-    let mut injector =
-        XdpPartitionInjector::new("xdp-partition-vlan-test", "lo", Ipv4Addr::new(127, 0, 0, 1), blocked_port);
-    let ctx = FaultContext { clock: Arc::new(SystemClock), seed: 1 };
-    injector.arm(&ctx).expect("arm xdp partition injector, needs root + CAP_BPF/CAP_NET_ADMIN");
+    let mut injector = XdpPartitionInjector::new(
+        "xdp-partition-vlan-test",
+        "lo",
+        Ipv4Addr::new(127, 0, 0, 1),
+        blocked_port,
+    );
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
+    injector
+        .arm(&ctx)
+        .expect("arm xdp partition injector, needs root + CAP_BPF/CAP_NET_ADMIN");
     assert!(injector.is_armed());
 
     let blocked_frame = build_vlan_udp_frame(vlan_ids, blocked_port, 9999, blocked_marker);
@@ -320,7 +357,10 @@ fn vlan_tag_peeling_matches_or_passes(vlan_ids: &[u16]) {
     injector.disarm().expect("disarm xdp partition injector");
     let capture3 = open_raw_socket(ifindex, Some(Duration::from_millis(300)));
     raw_send(sender, &blocked_frame);
-    assert!(raw_recv_contains(capture3, blocked_marker), "disarm should let the previously blocked peer through again");
+    assert!(
+        raw_recv_contains(capture3, blocked_marker),
+        "disarm should let the previously blocked peer through again"
+    );
 
     unsafe {
         libc::close(capture);
