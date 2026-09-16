@@ -80,11 +80,21 @@ just unit tested in isolation.
 
 ## Known limitations
 
-- `xdp_partition` only understands plain Ethernet + IPv4. No VLAN (802.1Q
-  shifts the EtherType position), no IPv6, no IP fragmentation. Packets in
-  any of those categories are safely ignored (never matched, so the fault
-  never fires on them), but that's a real coverage gap for a target running
-  dual-stack or on a tagged VLAN, not just a cosmetic one.
+- `xdp_partition` peels up to two 802.1Q/802.1ad tags (single VLAN and QinQ
+  double tagging) before checking for IPv4, verified with hand built raw
+  frames injected over `lo` via AF_PACKET, this sandbox can't create a real
+  VLAN subinterface to test full end to end delivery (`ip link add ... type
+  vlan` fails, no loadable kernel modules here), so the check is XDP's own
+  verdict (does the frame reach `netif_receive_skb` or not), not socket
+  delivery. Also fixed: non-initial IPv4 fragments used to get their raw
+  payload bytes misread as a udphdr/tcphdr, a real correctness bug, not
+  just a coverage gap, could falsely drop allowed traffic on a byte
+  coincidence. Both fixes have live regression tests, both were confirmed
+  to actually fail without the fix and pass with it, not just written and
+  trusted. Still not handled: IPv6. A v6 packet in that category is safely
+  ignored (never matched, so the fault never fires on it, same fail-safe
+  behavior as before), but that's a real coverage gap for a target running
+  dual-stack, not just a cosmetic one.
 - No throughput/load testing on any XDP injector yet, only traffic spaced
   5ms apart in the live tests. The global atomic counter should hold up
   under real concurrency, but "should" isn't "verified", worth a real
@@ -103,6 +113,21 @@ just unit tested in isolation.
   verified directly rather than assumed. The v2 code path follows the
   documented cgroup-v2 interface but needs real verification on a v2-only
   machine before it's trusted.
+- On GitHub Actions hosted runners specifically (confirmed cgroup v2
+  unified, `cgroup2fs`), the live `cgroup_mem_pressure_live` tests can't run
+  at all, and it isn't a bug in the injector: the job's own process tree
+  lives directly inside `system.slice/hosted-compute-agent.service`, a
+  cgroup with member processes of its own, and cgroup v2's no internal
+  process constraint forbids a non-root cgroup from enabling a controller
+  in its `cgroup.subtree_control` while it still has processes of its own
+  (see the [kernel's cgroup-v2 admin
+  guide](https://docs.kernel.org/admin-guide/cgroup-v2.html#no-internal-process-constraint)).
+  Confirmed directly on a hosted runner: `echo +memory >
+  .../hosted-compute-agent.service/cgroup.subtree_control` returns an I/O
+  error, and a child cgroup created underneath never gets `memory.max` (or
+  any other memory controller interface file). CI skips these two tests by
+  name for this reason, see the CI section below; they still run and pass
+  by hand on machines with real cgroup delegation.
 - `FixProxy` handles one client connection at a time, a second connection
   attempt queues in the OS backlog rather than being actively refused, and
   won't be served until the first session ends. Fine for testing a single
@@ -132,10 +157,12 @@ just unit tested in isolation.
 `-D warnings`, matching the zero-warnings bar this repo has been held to by
 hand throughout), `test` (a matrix across ubuntu-22.04, ubuntu-24.04, and
 ubuntu-24.04-arm, each running the normal suite plus the privileged kernel
-tests via `sudo`), and `determinism-gate` (builds the CLI, runs the FIX
-rate-limit example scenario, then replays it and asserts the trace matches
-bit-exact, the actual promise this README opens with, checked in CI, not
-just in an isolated unit test).
+tests via `sudo`, skipping the two cgroup memory-pressure tests that can't
+pass on a hosted runner's cgroup topology, see Known limitations), and
+`determinism-gate` (builds the CLI, runs the FIX rate-limit example
+scenario, then replays it and asserts the trace matches bit-exact, the
+actual promise this README opens with, checked in CI, not just in an
+isolated unit test).
 
 The arm64 leg is real, not aspirational: `kernel/build.rs` used to hardcode
 the x86_64 multiarch include path, fixed while wiring this up (via
