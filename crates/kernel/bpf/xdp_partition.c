@@ -7,7 +7,10 @@
 //
 // Verified against a real loopback capture that `lo` frames carry a real
 // 14 byte Ethernet header (zeroed MAC addresses, EtherType 0x0800) followed
-// by a normal IPv4 header, this isn't assumed.
+// by a normal IPv4 header, this isn't assumed. Peels up to two 802.1Q/
+// 802.1ad tags before checking for IPv4, verified with hand-crafted raw
+// frames injected over `lo` (see xdp_partition_live.rs), loopback itself
+// never tags anything.
 //
 // Separate program from xdp_pktloss/xdp_corrupt, same one-program-per-
 // interface limitation, see the TODO in lib.rs.
@@ -25,6 +28,14 @@ struct blackswan_bpf_map_def {
     unsigned int value_size;
     unsigned int max_entries;
     unsigned int map_flags;
+};
+
+// linux/if_vlan.h (the UAPI one) only has the ioctl plumbing, checked, no
+// vlan_hdr. This is the kernel's real, non-UAPI layout: 2 byte TCI
+// (priority + VID), 2 byte ethertype of whatever's actually underneath.
+struct vlan_hdr {
+    __be16 h_vlan_TCI;
+    __be16 h_vlan_encapsulated_proto;
 };
 
 struct blackswan_bpf_map_def SEC("maps") partition_enabled = {
@@ -64,10 +75,35 @@ int xdp_partition(struct xdp_md *ctx)
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end)
         return XDP_PASS;
-    if (eth->h_proto != bpf_htons(ETH_P_IP))
+
+    __u16 h_proto = eth->h_proto;
+    void *l3 = (void *)(eth + 1);
+
+    // up to one 802.1Q/802.1ad tag, then one more for QinQ double tagging.
+    // Unrolled by hand instead of a loop with #pragma unroll: this repo
+    // already targets the older non-CO-RE map style, not worth betting on
+    // bounded loop support or the unroll pragma actually firing on
+    // whatever clang the build uses.
+    if (h_proto == bpf_htons(ETH_P_8021Q) || h_proto == bpf_htons(ETH_P_8021AD)) {
+        struct vlan_hdr *vlan = l3;
+        if ((void *)(vlan + 1) > data_end)
+            return XDP_PASS;
+        h_proto = vlan->h_vlan_encapsulated_proto;
+        l3 = (void *)(vlan + 1);
+
+        if (h_proto == bpf_htons(ETH_P_8021Q) || h_proto == bpf_htons(ETH_P_8021AD)) {
+            struct vlan_hdr *vlan2 = l3;
+            if ((void *)(vlan2 + 1) > data_end)
+                return XDP_PASS;
+            h_proto = vlan2->h_vlan_encapsulated_proto;
+            l3 = (void *)(vlan2 + 1);
+        }
+    }
+
+    if (h_proto != bpf_htons(ETH_P_IP))
         return XDP_PASS;
 
-    struct iphdr *ip = (void *)(eth + 1);
+    struct iphdr *ip = l3;
     if ((void *)(ip + 1) > data_end)
         return XDP_PASS;
 
@@ -90,6 +126,17 @@ int xdp_partition(struct xdp_md *ctx)
 
     if (*want_port == 0)
         return XDP_DROP; // IP matched, any port, that's enough
+
+    // frag_off packs a 13 bit fragment offset into its low bits, network
+    // byte order, verified against the real struct iphdr (linux/ip.h): a
+    // nonzero offset means this is a non-initial fragment, there's no L4
+    // header at this offset at all, just raw payload from further into the
+    // original datagram. Reading it as a udphdr/tcphdr would be matching
+    // a configured port against bytes that were never a port. IP-only
+    // matching above is unaffected, every fragment carries the same
+    // source IP.
+    if (bpf_ntohs(ip->frag_off) & 0x1FFF)
+        return XDP_PASS;
 
     __u16 src_port;
     if (ip->protocol == 17) { // IPPROTO_UDP, IANA protocol number, fixed
