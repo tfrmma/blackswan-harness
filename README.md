@@ -135,8 +135,12 @@ sockets and a real kernel fault, not just unit tested in isolation.
   .../hosted-compute-agent.service/cgroup.subtree_control` returns an I/O
   error, and a child cgroup created underneath never gets `memory.max` (or
   any other memory controller interface file). CI skips these two tests by
-  name for this reason, see the CI section below; they still run and pass
-  by hand on machines with real cgroup delegation.
+  name for this reason, see the CI section below. `cgroup_mem.rs` places
+  the fault's cgroup as a sibling of the caller's own cgroup specifically
+  to sidestep this constraint (see the comment there), but that workaround
+  hasn't actually been confirmed passing yet on a machine with real v2
+  delegation, only reasoned through against the kernel doc. Worth an
+  honest test before leaning on it.
 - `FixProxy` handles one client connection at a time, a second connection
   attempt queues in the OS backlog rather than being actively refused, and
   won't be served until the first session ends. Fine for testing a single
@@ -193,6 +197,10 @@ directly or through `Runner`, needs root or `CAP_BPF` + `CAP_NET_ADMIN`. The
 live tests are `#[ignore]`d by default and share the loopback interface, run
 them explicitly and serialized with
 `cargo test -p blackswan-kernel -- --ignored --test-threads=1`.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
