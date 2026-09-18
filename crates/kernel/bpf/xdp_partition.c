@@ -194,7 +194,24 @@ int xdp_partition(struct xdp_md *ctx)
             return XDP_PASS;
 
         unsigned char *want_ip6 = bpf_map_lookup_elem(&partition_src_ip6, &key);
-        if (!want_ip6 || __builtin_memcmp(ip6->saddr.s6_addr, want_ip6, 16) != 0)
+        if (!want_ip6)
+            return XDP_PASS;
+
+        // __builtin_memcmp on the BPF target isn't reliably inlined across
+        // clang versions, confirmed against a real LLVM bug report
+        // (llvm/llvm-project#26592, "BPF target: always inline
+        // __builtin_memcmp and friends"), some versions emit an actual
+        // `call memcmp` instead, which fails to load with "error relocating
+        // function" since there's no libc to resolve it against. Plain byte
+        // compare instead, nothing for the compiler to lower into a call.
+        int ip6_matches = 1;
+        for (int i = 0; i < 16; i++) {
+            if (ip6->saddr.s6_addr[i] != want_ip6[i]) {
+                ip6_matches = 0;
+                break;
+            }
+        }
+        if (!ip6_matches)
             return XDP_PASS;
 
         want_port = bpf_map_lookup_elem(&partition_src_port, &key);
