@@ -4,7 +4,9 @@
 
 use blackswan_adapters::fix::framing::find_complete_message;
 use blackswan_adapters::fix::message::compute_checksum;
-use blackswan_adapters::fix::{FixAckWithoutExecution, FixFaultInjector, FixRateLimitThrottle, FixSilentReject};
+use blackswan_adapters::fix::{
+    FixAckWithoutExecution, FixExecutionReportPriceMutation, FixFaultInjector, FixRateLimitThrottle, FixSilentReject,
+};
 use blackswan_core::{FaultContext, FaultInjector, SystemClock};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -22,6 +24,15 @@ fn next_listen_port() -> u16 {
 
 fn build_execution_report(ord_status: &str, exec_type: &str) -> Vec<u8> {
     let body = format!("35=8\x0139={ord_status}\x01150={exec_type}\x01");
+    let header = format!("8=FIX.4.4\x019={}\x01", body.len());
+    let mut full = format!("{header}{body}").into_bytes();
+    let sum = compute_checksum(&full);
+    full.extend_from_slice(format!("10={sum:03}\x01").as_bytes());
+    full
+}
+
+fn build_execution_report_with_price(ord_status: &str, exec_type: &str, price: &str) -> Vec<u8> {
+    let body = format!("35=8\x0139={ord_status}\x01150={exec_type}\x0144={price}\x01");
     let header = format!("8=FIX.4.4\x019={}\x01", body.len());
     let mut full = format!("{header}{body}").into_bytes();
     let sum = compute_checksum(&full);
@@ -231,5 +242,63 @@ fn rate_limit_throttle_drops_outbound_messages_past_threshold() {
     assert_eq!(
         received_by_exchange, 2,
         "expected only 2 of 5 orders to reach the exchange, threshold was 2"
+    );
+}
+
+#[test]
+fn price_mutation_rewrites_the_fill_price_on_the_wire() {
+    let (port_tx, port_rx) = std::sync::mpsc::channel();
+    spawn_fake_exchange_that_sends(
+        port_tx,
+        vec![
+            build_execution_report("0", "0"), // ack, no price field, should pass through untouched
+            build_execution_report_with_price("2", "F", "100.50"),
+        ],
+    );
+    let exchange_port = port_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("fake exchange bound");
+
+    let listen_port = next_listen_port();
+    let mut injector = FixFaultInjector::new(
+        "fix-price-mutation-test",
+        format!("127.0.0.1:{listen_port}"),
+        format!("127.0.0.1:{exchange_port}"),
+        Arc::new(FixExecutionReportPriceMutation::new(b"1.00".to_vec())),
+    );
+
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
+    injector.arm(&ctx).expect("arm fix price mutation injector");
+    std::thread::sleep(Duration::from_millis(50));
+
+    let mut client = TcpStream::connect(("127.0.0.1", listen_port)).expect("connect to proxy");
+    client
+        .write_all(&build_new_order_single("order-3"))
+        .expect("send order");
+
+    let received = read_available_messages(&mut client, Duration::from_millis(500));
+    injector.disarm().expect("disarm");
+
+    assert_eq!(received.len(), 2, "both messages should arrive, mutated isn't dropped");
+
+    let ack = blackswan_adapters::fix::parse(&received[0]).unwrap();
+    assert!(ack.is(150, b"0"), "the ack has no price field, should be untouched");
+
+    let fill = blackswan_adapters::fix::parse(&received[1]).unwrap();
+    assert!(
+        fill.is(44, b"1.00"),
+        "the fill's price should have been rewritten to the mutated value on the actual wire bytes"
+    );
+    assert!(fill.is(150, b"F"), "everything else about the fill stays intact");
+
+    // and the bytes that arrived are a genuinely well-formed message, not
+    // just a lucky parse, find_complete_message re-validates BodyLength
+    assert_eq!(
+        find_complete_message(&received[1]).unwrap(),
+        Some(received[1].len()),
+        "mutated message must still be correctly framed, BodyLength has to match the new content"
     );
 }
