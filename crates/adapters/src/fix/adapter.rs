@@ -1,5 +1,5 @@
 use super::fields::*;
-use super::message::parse;
+use super::message::{parse, set_field};
 use blackswan_core::{Direction, HarnessError, InterceptAction, ProtocolAdapter, RawMessage};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -109,6 +109,50 @@ impl ProtocolAdapter for FixRateLimitThrottle {
     }
 }
 
+// Rewrites Price (44) on inbound ExecutionReport messages to a fixed
+// configured value, the first real InterceptAction::Mutate user. Simulates
+// a fill coming back at a different price than what was actually
+// requested, a stale cache or a gateway race on the exchange side, not a
+// hypothetical, and exactly the kind of thing a SOR that trusts the ack
+// instead of cross checking it against the order it sent would miss.
+// Leaves everything else forwarded untouched, including ExecutionReports
+// with no Price field at all (an ack with no fill yet has nothing to
+// mutate).
+pub struct FixExecutionReportPriceMutation {
+    mutated_price: Vec<u8>,
+}
+
+impl FixExecutionReportPriceMutation {
+    pub fn new(mutated_price: impl Into<Vec<u8>>) -> Self {
+        Self {
+            mutated_price: mutated_price.into(),
+        }
+    }
+}
+
+impl ProtocolAdapter for FixExecutionReportPriceMutation {
+    fn name(&self) -> &str {
+        "fix-execution-report-price-mutation"
+    }
+
+    fn intercept(&self, msg: &RawMessage) -> Result<InterceptAction, HarnessError> {
+        if msg.direction != Direction::Inbound {
+            return Ok(InterceptAction::Forward);
+        }
+
+        let parsed =
+            parse(&msg.bytes).map_err(|e| HarnessError::AdapterRejected(self.name().to_string(), format!("{e:?}")))?;
+
+        if !parsed.is(TAG_MSG_TYPE, MSG_TYPE_EXECUTION_REPORT) || parsed.get(TAG_PRICE).is_none() {
+            return Ok(InterceptAction::Forward);
+        }
+
+        let mutated = set_field(&msg.bytes, TAG_PRICE, &self.mutated_price)
+            .map_err(|e| HarnessError::AdapterRejected(self.name().to_string(), format!("{e:?}")))?;
+        Ok(InterceptAction::Mutate(mutated))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +162,15 @@ mod tests {
         // computed by hand and cross-checked against message.rs's own
         // compute_checksum in the test below, not asserted blind
         let body = format!("35=8\x0139={ord_status}\x01150={exec_type}\x01");
+        let header = format!("8=FIX.4.4\x019={}\x01", body.len());
+        let mut full = format!("{header}{body}").into_bytes();
+        let sum = crate::fix::message::compute_checksum(&full);
+        full.extend_from_slice(format!("10={sum:03}\x01").as_bytes());
+        full
+    }
+
+    fn reference_execution_report_with_price(ord_status: &str, exec_type: &str, price: &str) -> Vec<u8> {
+        let body = format!("35=8\x0139={ord_status}\x01150={exec_type}\x0144={price}\x01");
         let header = format!("8=FIX.4.4\x019={}\x01", body.len());
         let mut full = format!("{header}{body}").into_bytes();
         let sum = crate::fix::message::compute_checksum(&full);
@@ -187,6 +240,41 @@ mod tests {
     fn rate_limit_throttle_ignores_inbound_traffic() {
         let adapter = FixRateLimitThrottle::new(0);
         let msg = inbound(reference_execution_report("0", "0"));
+        assert!(matches!(adapter.intercept(&msg).unwrap(), InterceptAction::Forward));
+    }
+
+    #[test]
+    fn price_mutation_rewrites_the_price_on_a_fill() {
+        let adapter = FixExecutionReportPriceMutation::new(b"1.00".to_vec());
+        let msg = inbound(reference_execution_report_with_price("2", "F", "100.50"));
+
+        let action = adapter.intercept(&msg).unwrap();
+        let InterceptAction::Mutate(bytes) = action else {
+            panic!("expected Mutate, got a different action");
+        };
+        let parsed = crate::fix::message::parse(&bytes).unwrap();
+        assert!(parsed.is(TAG_PRICE, b"1.00"));
+        assert!(parsed.is(TAG_EXEC_TYPE, b"F")); // untouched fields survive the rewrite
+    }
+
+    #[test]
+    fn price_mutation_forwards_an_execution_report_with_no_price_field() {
+        let adapter = FixExecutionReportPriceMutation::new(b"1.00".to_vec());
+        let ack = inbound(reference_execution_report("0", "0")); // no tag 44 at all
+        assert!(matches!(adapter.intercept(&ack).unwrap(), InterceptAction::Forward));
+    }
+
+    #[test]
+    fn price_mutation_forwards_non_execution_report_messages() {
+        let adapter = FixExecutionReportPriceMutation::new(b"1.00".to_vec());
+        let reject = inbound(reference_execution_report("8", "8")); // no price field either
+        assert!(matches!(adapter.intercept(&reject).unwrap(), InterceptAction::Forward));
+    }
+
+    #[test]
+    fn price_mutation_ignores_outbound_traffic() {
+        let adapter = FixExecutionReportPriceMutation::new(b"1.00".to_vec());
+        let msg = outbound(reference_execution_report_with_price("2", "F", "100.50"));
         assert!(matches!(adapter.intercept(&msg).unwrap(), InterceptAction::Forward));
     }
 }
