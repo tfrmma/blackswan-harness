@@ -1,14 +1,15 @@
-use crate::bpf_util::set_u32_map;
+use crate::bpf_util::{set_bytes16_map, set_u32_map};
 use aya::programs::{Xdp, XdpFlags};
 use aya::Bpf;
 use blackswan_core::{FaultContext, FaultInjector, HarnessError};
 use std::convert::TryInto;
-use std::net::Ipv4Addr;
+use std::net::IpAddr;
 
 const XDP_PARTITION_OBJ: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp_partition.o"));
 const PROGRAM_NAME: &str = "xdp_partition";
 const ENABLED_MAP: &str = "partition_enabled";
 const SRC_IP_MAP: &str = "partition_src_ip";
+const SRC_IP6_MAP: &str = "partition_src_ip6";
 const SRC_PORT_MAP: &str = "partition_src_port";
 
 // Network partition ("split-brain") via XDP: unconditionally drops every
@@ -16,7 +17,9 @@ const SRC_PORT_MAP: &str = "partition_src_port";
 // configured peer. No modulus, no counter, pure match/no-match, so unlike
 // packet loss and corruption there's nothing here that needs the
 // determinism engine beyond the config itself, the config is the entire
-// behavior.
+// behavior. IPv4 and IPv6 peers both work, picked at construction time by
+// which IpAddr variant gets passed in, one map per family on the kernel
+// side, only the matching one ever gets written.
 //
 // src_port of 0 means "any port from that IP", a coarser host-level cut
 // rather than isolating one specific connection.
@@ -27,18 +30,18 @@ const SRC_PORT_MAP: &str = "partition_src_port";
 pub struct XdpPartitionInjector {
     id: String,
     iface: String,
-    src_ip: Ipv4Addr,
+    src_ip: IpAddr,
     src_port: u16,
     bpf: Option<Bpf>,
     armed: bool,
 }
 
 impl XdpPartitionInjector {
-    pub fn new(id: impl Into<String>, iface: impl Into<String>, src_ip: Ipv4Addr, src_port: u16) -> Self {
+    pub fn new(id: impl Into<String>, iface: impl Into<String>, src_ip: impl Into<IpAddr>, src_port: u16) -> Self {
         Self {
             id: id.into(),
             iface: iface.into(),
-            src_ip,
+            src_ip: src_ip.into(),
             src_port,
             bpf: None,
             armed: false,
@@ -73,12 +76,17 @@ impl XdpPartitionInjector {
         self.bpf = Some(bpf);
 
         let bpf = self.bpf.as_mut().expect("just assigned above");
-        // ip->saddr is compared as raw network-byte-order bytes on the
-        // kernel side, Ipv4Addr::octets() gives us those same bytes, from_ne_bytes
-        // reassembles them into the matching u32 representation on this
-        // (little-endian) host without a htonl/ntohl round trip
-        let ip_as_stored = u32::from_ne_bytes(self.src_ip.octets());
-        set_u32_map(bpf, &self.id, SRC_IP_MAP, ip_as_stored)?;
+        match self.src_ip {
+            // ip->saddr is compared as raw network-byte-order bytes on the
+            // kernel side, Ipv4Addr::octets() gives us those same bytes, from_ne_bytes
+            // reassembles them into the matching u32 representation on this
+            // (little-endian) host without a htonl/ntohl round trip
+            IpAddr::V4(v4) => set_u32_map(bpf, &self.id, SRC_IP_MAP, u32::from_ne_bytes(v4.octets()))?,
+            // ip6->saddr.s6_addr is a plain 16 byte array on the kernel
+            // side, octets() is already that same byte order, no
+            // reassembly needed the way v4's u32 above does
+            IpAddr::V6(v6) => set_bytes16_map(bpf, &self.id, SRC_IP6_MAP, v6.octets())?,
+        }
         set_u32_map(bpf, &self.id, SRC_PORT_MAP, self.src_port as u32)?;
         Ok(())
     }
