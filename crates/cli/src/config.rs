@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::IpAddr;
 
 // Declarative shape of a scenario config file. `schedule` reuses
 // blackswan_core::ScenarioStep directly rather than a copy of the same
@@ -31,7 +31,7 @@ pub enum InjectorConfig {
     },
     XdpPartition {
         iface: String,
-        src_ip: Ipv4Addr,
+        src_ip: IpAddr,
         src_port: u16,
     },
     CgroupMemoryPressure {
