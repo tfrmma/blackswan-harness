@@ -1,10 +1,8 @@
 const SOH: u8 = 0x01;
 
-// Read-only view over a parsed FIX message. Doesn't own a serializer, none
-// of the fault rules in this crate mutate a message, they only decide
-// Forward/Drop, so the original bytes go out unchanged when forwarded.
-// Add a serializer if a Mutate-based fault ever needs one, don't build it
-// speculatively.
+// Read-only view over a parsed FIX message. Field order is preserved
+// (Vec, not a map), set_field below relies on that to reconstruct a
+// message with everything but the target tag's value unchanged.
 #[derive(Debug)]
 pub struct FixMessage<'a> {
     fields: Vec<(u32, &'a [u8])>,
@@ -70,6 +68,51 @@ pub fn format_checksum(sum: u8) -> String {
     format!("{sum:03}")
 }
 
+// Re-encodes `bytes` with `tag`'s value replaced by `new_value`,
+// recomputing BodyLength (9) and CheckSum (10) so the result is a valid,
+// self-consistent FIX message, not just bytes that happen to look like
+// one. BeginString (8) carries over unchanged. Mutating 8, 9, or 10
+// directly through this isn't meaningful, they're structural and get
+// recomputed regardless of what's passed for them. Caller's job to
+// confirm `tag` is actually present first (FixExecutionReportPriceMutation
+// does), this just leaves the message otherwise unchanged if it isn't,
+// nothing to replace.
+pub fn set_field(bytes: &[u8], tag: u32, new_value: &[u8]) -> Result<Vec<u8>, ParseError> {
+    let parsed = parse(bytes)?;
+    // framing.rs only ever hands parse() a message that already had a
+    // well-formed "8=...\x019=NNN\x01" prefix, tag 8 missing here would
+    // mean framing's own invariant broke, not something to recover from
+    let begin_string = parsed
+        .get(8)
+        .expect("framed message always has tag 8, framing.rs guarantees it");
+
+    let mut body = Vec::new();
+    for &(t, v) in &parsed.fields {
+        if t == 8 || t == 9 || t == 10 {
+            continue; // structural, recomputed below, never copied verbatim
+        }
+        let value = if t == tag { new_value } else { v };
+        body.extend_from_slice(t.to_string().as_bytes());
+        body.push(b'=');
+        body.extend_from_slice(value);
+        body.push(SOH);
+    }
+
+    let mut full = Vec::new();
+    full.extend_from_slice(b"8=");
+    full.extend_from_slice(begin_string);
+    full.push(SOH);
+    full.extend_from_slice(format!("9={}", body.len()).as_bytes());
+    full.push(SOH);
+    full.extend_from_slice(&body);
+
+    let checksum = compute_checksum(&full);
+    full.extend_from_slice(format!("10={checksum:03}").as_bytes());
+    full.push(SOH);
+
+    Ok(full)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +155,49 @@ mod tests {
     fn rejects_field_without_equals() {
         let bad = b"35D\x01".to_vec();
         assert_eq!(parse(&bad).unwrap_err(), ParseError::MalformedTag);
+    }
+
+    #[test]
+    fn set_field_replaces_the_value_and_recomputes_length_and_checksum() {
+        let body = "35=8\x0139=1\x01150=F\x0144=100.50\x01";
+        let header = format!("8=FIX.4.4\x019={}\x01", body.len());
+        let mut original = format!("{header}{body}").into_bytes();
+        let sum = compute_checksum(&original);
+        original.extend_from_slice(format!("10={sum:03}\x01").as_bytes());
+
+        let mutated = set_field(&original, 44, b"999.99").unwrap();
+        let reparsed = parse(&mutated).unwrap();
+
+        assert!(reparsed.is(44, b"999.99"));
+        // everything else untouched
+        assert!(reparsed.is(35, b"8"));
+        assert!(reparsed.is(39, b"1"));
+        assert!(reparsed.is(150, b"F"));
+        assert!(reparsed.is(8, b"FIX.4.4"));
+
+        // BodyLength and CheckSum are recomputed against the mutated
+        // bytes, not just carried over from the original, verified
+        // independently rather than trusting set_field's own arithmetic
+        let tag9_value = reparsed.get(9).unwrap();
+        let declared_body_len: usize = std::str::from_utf8(tag9_value).unwrap().parse().unwrap();
+        let first_soh = mutated.iter().position(|&b| b == SOH).unwrap();
+        let second_soh = first_soh + 1 + mutated[first_soh + 1..].iter().position(|&b| b == SOH).unwrap();
+        let header_len = second_soh + 1; // through the SOH ending tag 9
+        let checksum_field_start = mutated.windows(4).rposition(|w| w == [SOH, b'1', b'0', b'=']).unwrap() + 1;
+        assert_eq!(declared_body_len, checksum_field_start - header_len);
+
+        let expected_checksum = compute_checksum(&mutated[..checksum_field_start]);
+        assert!(reparsed.is(10, format_checksum(expected_checksum).as_bytes()));
+    }
+
+    #[test]
+    fn set_field_on_a_tag_not_present_leaves_the_message_otherwise_valid() {
+        let original = reference_message();
+        // tag 999 isn't in the reference message at all, set_field doesn't
+        // require presence, just replaces zero occurrences
+        let mutated = set_field(&original, 999, b"whatever").unwrap();
+        let reparsed = parse(&mutated).unwrap();
+        assert!(reparsed.get(999).is_none());
+        assert!(reparsed.is(35, b"A")); // original fields still intact
     }
 }
