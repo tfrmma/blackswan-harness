@@ -57,6 +57,11 @@ pub enum InjectorConfig {
         upstream_addr: String,
         threshold: u64,
     },
+    FixExecutionReportPriceMutation {
+        listen_addr: String,
+        upstream_addr: String,
+        mutated_price: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,6 +125,12 @@ mod tests {
                 "type = \"fix_rate_limit_throttle\"\nlisten_addr = \"127.0.0.1:9001\"\nupstream_addr = \"127.0.0.1:9002\"\nthreshold = 3"
             ),
             InjectorConfig::FixRateLimitThrottle { .. }
+        ));
+        assert!(matches!(
+            parse_one(
+                "type = \"fix_execution_report_price_mutation\"\nlisten_addr = \"127.0.0.1:9001\"\nupstream_addr = \"127.0.0.1:9002\"\nmutated_price = \"1.00\""
+            ),
+            InjectorConfig::FixExecutionReportPriceMutation { .. }
         ));
     }
 
