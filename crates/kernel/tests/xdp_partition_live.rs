@@ -7,7 +7,7 @@
 use blackswan_core::{FaultContext, FaultInjector, SystemClock};
 use blackswan_kernel::XdpPartitionInjector;
 use std::ffi::CString;
-use std::net::{Ipv4Addr, UdpSocket};
+use std::net::{Ipv4Addr, Ipv6Addr, UdpSocket};
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,7 +76,169 @@ fn xdp_partition_blocks_only_the_configured_peer_port() {
     assert_eq!(received_after, 2, "disarm should let both peers through again");
 }
 
-// Confirms the fragmentation fix in xdp_partition.c: shrinks lo's MTU so a
+// This sandbox has no IPv6 stack at all (/proc/net/if_inet6 doesn't exist,
+// neither does /proc/sys/net/ipv6, confirmed, not assumed: binding a
+// [::1]:0 UdpSocket fails with EAFNOSUPPORT), so real end to end socket
+// delivery isn't testable here either, same situation as the VLAN tests
+// above and the same fix: raw AF_PACKET capture observing XDP's own
+// verdict directly, which doesn't depend on the rest of the kernel
+// understanding IPv6 at all, only on this program's own parsing of it.
+
+fn build_ipv6_udp_frame(src_ip: Ipv6Addr, dst_ip: Ipv6Addr, src_port: u16, dst_port: u16, payload: &[u8]) -> Vec<u8> {
+    let mut frame = vec![0u8; 12]; // zeroed dst + src mac
+    frame.extend_from_slice(&0x86DDu16.to_be_bytes());
+
+    let udp_len = 8 + payload.len();
+    frame.push(0x60); // version 6, top nibble of traffic class 0
+    frame.extend_from_slice(&[0, 0, 0]); // rest of traffic class + flow label
+    frame.extend_from_slice(&(udp_len as u16).to_be_bytes()); // payload_len
+    frame.push(17); // nexthdr, IPPROTO_UDP
+    frame.push(64); // hop_limit
+    frame.extend_from_slice(&src_ip.octets());
+    frame.extend_from_slice(&dst_ip.octets());
+
+    frame.extend_from_slice(&src_port.to_be_bytes());
+    frame.extend_from_slice(&dst_port.to_be_bytes());
+    frame.extend_from_slice(&(udp_len as u16).to_be_bytes());
+    frame.extend_from_slice(&0u16.to_be_bytes()); // checksum, XDP's own parsing doesn't check it
+    frame.extend_from_slice(payload);
+    frame
+}
+
+// standalone Fragment extension header packet (RFC 8200 section 4.5), not
+// an actual OS-fragmented datagram, this sandbox has no IPv6 stack to
+// fragment one with. XDP evaluates each packet on the wire independently
+// anyway, so a hand built non-initial fragment exercises the exact same
+// code path a real one would.
+fn build_ipv6_fragment_frame(
+    src_ip: Ipv6Addr,
+    dst_ip: Ipv6Addr,
+    frag_offset_units: u16,
+    more_fragments: bool,
+    fragment_payload: &[u8],
+) -> Vec<u8> {
+    let mut frame = vec![0u8; 12];
+    frame.extend_from_slice(&0x86DDu16.to_be_bytes());
+
+    let payload_len = 8 + fragment_payload.len(); // 8 byte frag header + this fragment's bytes
+    frame.push(0x60);
+    frame.extend_from_slice(&[0, 0, 0]);
+    frame.extend_from_slice(&(payload_len as u16).to_be_bytes());
+    frame.push(44); // nexthdr, IPPROTO_FRAGMENT
+    frame.push(64);
+    frame.extend_from_slice(&src_ip.octets());
+    frame.extend_from_slice(&dst_ip.octets());
+
+    frame.push(17); // frag header's own nexthdr, IPPROTO_UDP
+    frame.push(0); // reserved
+    let off_and_flags: u16 = (frag_offset_units << 3) | if more_fragments { 1 } else { 0 };
+    frame.extend_from_slice(&off_and_flags.to_be_bytes());
+    frame.extend_from_slice(&0xAAAA_BBBBu32.to_be_bytes()); // identification, arbitrary
+    frame.extend_from_slice(fragment_payload);
+    frame
+}
+
+#[test]
+#[ignore]
+fn xdp_partition_ipv6_matches_via_raw_capture() {
+    let ifindex = if_index("lo");
+    let capture = open_raw_socket(ifindex, Some(Duration::from_millis(300)));
+    let sender = open_raw_socket(ifindex, None);
+
+    let blocked_port: u16 = 42000;
+    let other_port: u16 = 42001;
+    let blocked_marker = b"BLOCKED-V6-MARKER-7c2d";
+    let other_marker = b"ALLOWED-V6-MARKER-7c2d";
+
+    let mut injector = XdpPartitionInjector::new("xdp-partition-v6-raw-test", "lo", Ipv6Addr::LOCALHOST, blocked_port);
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
+    injector
+        .arm(&ctx)
+        .expect("arm xdp partition injector, needs root + CAP_BPF/CAP_NET_ADMIN");
+    assert!(injector.is_armed());
+
+    let blocked_frame = build_ipv6_udp_frame(
+        Ipv6Addr::LOCALHOST,
+        Ipv6Addr::LOCALHOST,
+        blocked_port,
+        9999,
+        blocked_marker,
+    );
+    let other_frame = build_ipv6_udp_frame(Ipv6Addr::LOCALHOST, Ipv6Addr::LOCALHOST, other_port, 9999, other_marker);
+    raw_send(sender, &blocked_frame);
+    raw_send(sender, &other_frame);
+
+    assert!(
+        !raw_recv_contains(capture, blocked_marker),
+        "blocked v6 peer's frame reached netif_receive_skb, XDP should have dropped it"
+    );
+    let capture2 = open_raw_socket(ifindex, Some(Duration::from_millis(300)));
+    raw_send(sender, &other_frame);
+    assert!(
+        raw_recv_contains(capture2, other_marker),
+        "other v6 peer's frame never reached netif_receive_skb, XDP wrongly dropped it"
+    );
+
+    injector.disarm().expect("disarm xdp partition injector");
+    let capture3 = open_raw_socket(ifindex, Some(Duration::from_millis(300)));
+    raw_send(sender, &blocked_frame);
+    assert!(
+        raw_recv_contains(capture3, blocked_marker),
+        "disarm should let the previously blocked v6 peer through again"
+    );
+
+    unsafe {
+        libc::close(capture);
+        libc::close(capture2);
+        libc::close(capture3);
+        libc::close(sender);
+    }
+}
+
+#[test]
+#[ignore]
+fn xdp_partition_never_drops_a_non_initial_ipv6_fragment_on_byte_collision() {
+    let ifindex = if_index("lo");
+    let capture = open_raw_socket(ifindex, Some(Duration::from_millis(300)));
+    let sender = open_raw_socket(ifindex, None);
+
+    let blocked_port: u16 = 42002;
+    let marker = b"V6-FRAG-COLLISION-MARKER-3e91";
+
+    let mut injector = XdpPartitionInjector::new("xdp-partition-v6-frag-test", "lo", Ipv6Addr::LOCALHOST, blocked_port);
+    let ctx = FaultContext {
+        clock: Arc::new(SystemClock),
+        seed: 1,
+    };
+    injector
+        .arm(&ctx)
+        .expect("arm xdp partition injector, needs root + CAP_BPF/CAP_NET_ADMIN");
+    assert!(injector.is_armed());
+
+    // this fragment's payload starts with the blocked port's big endian
+    // bytes, exactly what udphdr.source would hold if misread. Non-initial
+    // (frag_offset_units = 1, the minimum nonzero value, 8 bytes into the
+    // original datagram), so there's no real L4 header here at all, the
+    // fix must PASS this regardless of what the bytes look like.
+    let mut payload = blocked_port.to_be_bytes().to_vec();
+    payload.extend_from_slice(marker);
+    let frame = build_ipv6_fragment_frame(Ipv6Addr::LOCALHOST, Ipv6Addr::LOCALHOST, 1, false, &payload);
+    raw_send(sender, &frame);
+
+    assert!(
+        raw_recv_contains(capture, marker),
+        "non-initial v6 fragment got dropped on a byte coincidence, the exact bug the frag_off check guards against"
+    );
+
+    injector.disarm().expect("disarm xdp partition injector");
+    unsafe {
+        libc::close(capture);
+        libc::close(sender);
+    }
+}
 // UDP datagram actually fragments at a real kernel boundary (RFC 791
 // section 3.2 requires every non-final fragment's IP payload to be a
 // multiple of 8 bytes), then sends a payload deliberately built so a
