@@ -10,6 +10,7 @@ pub const TAG_MSG_TYPE: u32 = 35;
 pub const TAG_MSG_SEQ_NUM: u32 = 34;
 pub const TAG_ORD_STATUS: u32 = 39;
 pub const TAG_EXEC_TYPE: u32 = 150;
+pub const TAG_PRICE: u32 = 44;
 pub const TAG_CHECKSUM: u32 = 10;
 
 // MsgType (35) values relevant here. FIX 4.0-4.4 all use the same 3-field
