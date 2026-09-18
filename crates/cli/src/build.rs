@@ -1,5 +1,7 @@
 use crate::config::{InjectorConfig, PressureModeConfig};
-use blackswan_adapters::fix::{FixAckWithoutExecution, FixFaultInjector, FixRateLimitThrottle, FixSilentReject};
+use blackswan_adapters::fix::{
+    FixAckWithoutExecution, FixExecutionReportPriceMutation, FixFaultInjector, FixRateLimitThrottle, FixSilentReject,
+};
 use blackswan_core::FaultInjector;
 use blackswan_kernel::{
     CgroupMemoryPressureInjector, PressureMode, TimeSkewInjector, XdpCorruptionInjector, XdpPacketLossInjector,
@@ -71,6 +73,16 @@ pub fn build_injector(id: &str, config: InjectorConfig) -> Box<dyn FaultInjector
             listen_addr,
             upstream_addr,
             Arc::new(FixRateLimitThrottle::new(threshold)),
+        )),
+        InjectorConfig::FixExecutionReportPriceMutation {
+            listen_addr,
+            upstream_addr,
+            mutated_price,
+        } => Box::new(FixFaultInjector::new(
+            id,
+            listen_addr,
+            upstream_addr,
+            Arc::new(FixExecutionReportPriceMutation::new(mutated_price)),
         )),
     }
 }
