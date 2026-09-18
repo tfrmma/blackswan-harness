@@ -15,13 +15,13 @@ reproduce that bug bit-exact, not just "probably" reproduce it.
 Layer 1 (kernel-level fault injection) is complete: three real XDP faults
 (packet loss, byte corruption, network partition), cgroup-based memory
 pressure, and time namespace clock skew. Layer 2 (protocol-aware adapters)
-has its first real target: FIX, with three exchange-semantic faults (silent
-reject, ack without execution, rate-limit throttle) running through a real
-TCP proxy. Phase 5 (control plane) has a real CLI: `blackswan run` drives a
-TOML-configured scenario against real injectors in real time, `blackswan
-replay` confirms a scenario reproduces a saved trace bit-exact. Verified
-end to end, config file through real sockets and a real kernel fault, not
-just unit tested in isolation.
+has its first real target: FIX, with four exchange-semantic faults (silent
+reject, ack without execution, rate-limit throttle, execution report price
+mutation) running through a real TCP proxy. Phase 5 (control plane) has a
+real CLI: `blackswan run` drives a TOML-configured scenario against real
+injectors in real time, `blackswan replay` confirms a scenario reproduces a
+saved trace bit-exact. Verified end to end, config file through real
+sockets and a real kernel fault, not just unit tested in isolation.
 
 ## Layout
 
@@ -59,14 +59,16 @@ just unit tested in isolation.
 - `crates/adapters` - layer 2, protocol-aware exchange fault injection. FIX
   4.0-4.4 dialect (3-field header: BeginString, BodyLength, MsgType; the
   FIXT.1.1/5.0 extended header isn't supported). `crates/adapters/src/fix/`:
-  `message.rs` (parsing, checksum, verified against a real reference
-  message), `framing.rs` (finds message boundaries in a TCP byte stream),
-  `proxy.rs` (`FixProxy`, a real TCP man-in-the-middle, single connection at
-  a time), `adapter.rs` (`FixSilentReject`, `FixAckWithoutExecution`,
-  `FixRateLimitThrottle`, the actual `ProtocolAdapter` decision logic),
-  `injector.rs` (`FixFaultInjector`, wraps any `ProtocolAdapter` as a
-  `FaultInjector`, composition instead of one struct per fault since all
-  three share the same proxy mechanism and only differ in decision logic).
+  `message.rs` (parsing, checksum, and `set_field`, a re-encoder that
+  recomputes BodyLength/CheckSum after replacing one tag's value, verified
+  against a real reference message), `framing.rs` (finds message boundaries
+  in a TCP byte stream), `proxy.rs` (`FixProxy`, a real TCP man-in-the-
+  middle, single connection at a time), `adapter.rs` (`FixSilentReject`,
+  `FixAckWithoutExecution`, `FixRateLimitThrottle`,
+  `FixExecutionReportPriceMutation`, the actual `ProtocolAdapter` decision
+  logic), `injector.rs` (`FixFaultInjector`, wraps any `ProtocolAdapter` as
+  a `FaultInjector`, composition instead of one struct per fault since all
+  four share the same proxy mechanism and only differ in decision logic).
   Verified end to end over real TCP sockets, no root needed.
 - `crates/cli` - the control plane binary (`blackswan`). `run` loads a TOML
   scenario config, builds the named injectors, and drives them through
@@ -81,20 +83,27 @@ just unit tested in isolation.
 ## Known limitations
 
 - `xdp_partition` peels up to two 802.1Q/802.1ad tags (single VLAN and QinQ
-  double tagging) before checking for IPv4, verified with hand built raw
-  frames injected over `lo` via AF_PACKET, this sandbox can't create a real
-  VLAN subinterface to test full end to end delivery (`ip link add ... type
-  vlan` fails, no loadable kernel modules here), so the check is XDP's own
-  verdict (does the frame reach `netif_receive_skb` or not), not socket
-  delivery. Also fixed: non-initial IPv4 fragments used to get their raw
-  payload bytes misread as a udphdr/tcphdr, a real correctness bug, not
-  just a coverage gap, could falsely drop allowed traffic on a byte
-  coincidence. Both fixes have live regression tests, both were confirmed
-  to actually fail without the fix and pass with it, not just written and
-  trusted. Still not handled: IPv6. A v6 packet in that category is safely
-  ignored (never matched, so the fault never fires on it, same fail-safe
-  behavior as before), but that's a real coverage gap for a target running
-  dual-stack, not just a cosmetic one.
+  double tagging) before checking for IPv4 or IPv6, verified with hand
+  built raw frames injected over `lo` via AF_PACKET, this sandbox can't
+  create a real VLAN subinterface to test full end to end delivery
+  (`ip link add ... type vlan` fails, no loadable kernel modules here), and
+  has no IPv6 stack at all (`/proc/net/if_inet6` doesn't exist, binding a
+  v6 socket fails with EAFNOSUPPORT, confirmed not assumed), so both the
+  VLAN and IPv6 checks observe XDP's own verdict (does the frame reach
+  `netif_receive_skb` or not) rather than real socket delivery. IPv6
+  matches on the full 128 bit source address (`partition_src_ip6`, a
+  parallel map to the v4 one, `src_port` is shared, family-agnostic).
+  Extension headers: exactly one Fragment header is walked (the v6
+  equivalent of the v4 fragmentation fix below), anything else in the
+  chain (Hop-by-Hop, Routing, Destination Options, ESP/AH...) isn't
+  walked, safely passed instead rather than guessed at, a real coverage
+  gap for a target that uses those, not just a cosmetic one. Also fixed
+  for both v4 and v6: non-initial fragments used to get their raw payload
+  bytes misread as a udphdr/tcphdr, a real correctness bug, not just a
+  coverage gap, could falsely drop allowed traffic on a byte coincidence.
+  Every fix here has a live regression test, and every one of those was
+  confirmed to actually fail without the fix and pass with it (reverted,
+  watched it fail, restored), not just written and trusted.
 - No throughput/load testing on any XDP injector yet, only traffic spaced
   5ms apart in the live tests. The global atomic counter should hold up
   under real concurrency, but "should" isn't "verified", worth a real
@@ -136,10 +145,16 @@ just unit tested in isolation.
 - The FIX adapters only inspect flat fields (35, 39, 150), no repeating
   group support. Not needed for the three faults implemented so far, would
   matter for anything wanting to key off a field inside a repeating group.
-- Only three FIX message types are handled (ExecutionReport, Reject,
-  OrderCancelReject) and `InterceptAction::Mutate` has no FIX adapter using
-  it yet, mutating an outbound NewOrderSingle (wrong price, stale ClOrdID,
-  wrong side) is a real gap, not just an unlikely one.
+- Only three FIX message types are actively inspected (ExecutionReport,
+  Reject, OrderCancelReject). `InterceptAction::Mutate` has one real
+  adapter now, `FixExecutionReportPriceMutation` (inbound, rewrites Price
+  on a fill, `message.rs::set_field` recomputes BodyLength/CheckSum so the
+  result is a genuinely valid message, not just plausible-looking bytes,
+  verified against an independent checksum computation and re-framed with
+  `find_complete_message` in the live test, not just parsed once and
+  trusted). Mutating outbound NewOrderSingle fields (wrong price, stale
+  ClOrdID, wrong side) is still a real gap, not just an unlikely one,
+  nothing reads or rewrites a client's own order yet.
 - FIX is the only protocol adapter. WebSocket (most crypto exchange retail
   APIs) and plain REST (order entry over HTTP, real 429s instead of FIX
   BusinessMessageReject) are the obvious next targets, deliberately not
@@ -169,11 +184,6 @@ the x86_64 multiarch include path, fixed while wiring this up (via
 `dpkg-architecture -qDEB_HOST_MULTIARCH`, with a fallback for the two
 architectures this crate claims to support), otherwise the arm64 job would
 have failed on the first push.
-
-Caveat: this workflow is written against verified facts (the runner labels,
-the actions used, local reproduction of what each job runs) but hasn't
-been exercised by an actual GitHub Actions run yet, that needs a real push
-to confirm.
 
 ## Requirements
 
