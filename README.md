@@ -1,5 +1,11 @@
 # blackswan-harness
 
+[![CI](https://img.shields.io/github/actions/workflow/status/tfrmma/blackswan-harness/ci.yml?branch=main&label=CI&logo=github)](https://github.com/tfrmma/blackswan-harness/actions/workflows/ci.yml)
+[![Clippy](https://img.shields.io/github/actions/workflow/status/tfrmma/blackswan-harness/clippy.yml?branch=main&label=clippy&logo=rust)](https://github.com/tfrmma/blackswan-harness/actions/workflows/clippy.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/tfrmma/blackswan-harness/ci.yml?branch=main&label=tests&logo=github)](https://github.com/tfrmma/blackswan-harness/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/tfrmma/blackswan-harness?include_prereleases&label=release&logo=github)](https://github.com/tfrmma/blackswan-harness/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Deterministic chaos engineering for latency-sensitive
 trading infrastructure. Two layers: kernel-level fault injection (eBPF,
 cgroups, time namespaces) that works against any target with zero code
@@ -9,6 +15,43 @@ rejects, acks without execution, sudden rate-limit throttling.
 
 Every fault run is seeded and replayable. A scenario that finds a bug should
 reproduce that bug bit-exact, not just "probably" reproduce it.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    TOML["scenario.toml"] --> CLI["blackswan run"]
+    CLI --> BUILD["build.rs<br/>config → real injectors/adapters"]
+    RNG["DeterministicRng (SplitMix64)<br/>+ ValidatedSchedule"] --> RUNNER
+    BUILD --> RUNNER["Runner::run_realtime()<br/>(blackswan-replay)"]
+
+    RUNNER -->|arm/disarm at scheduled offset| L1
+    RUNNER -->|arm/disarm at scheduled offset| L2
+
+    subgraph L1["Layer 1 — kernel (crates/kernel)"]
+        XDP["XDP: packet loss / corruption / partition"]
+        CGROUP["cgroup memory pressure"]
+        NETNS["time namespace clock skew"]
+    end
+
+    subgraph L2["Layer 2 — exchange protocol (crates/adapters)"]
+        PROXY["FixProxy<br/>(real TCP man-in-the-middle)"]
+        ADAPTER["ProtocolAdapter<br/>silent reject / ack w/o exec /<br/>rate-limit throttle / price mutation"]
+        PROXY --> ADAPTER
+    end
+
+    L1 --> TARGET["target under test<br/>(your OMS/SOR, real sockets)"]
+    L2 --> TARGET
+
+    RUNNER --> TRACE["Trace (.json)"]
+    TRACE --> REPLAY["blackswan replay"]
+    REPLAY --> MATCH{"bit-exact match?"}
+```
+
+A run against real infrastructure produces a `Trace`. `blackswan replay`
+re-runs the same schedule against a `VirtualClock` and asserts the result
+matches that trace bit-exact, that's the actual guarantee, checked in CI's
+`determinism-gate` job on every push, not just claimed here.
 
 ## Status
 
@@ -180,16 +223,18 @@ sockets and a real kernel fault, not just unit tested in isolation.
 
 ## CI
 
-`.github/workflows/ci.yml`. Four jobs: `fmt` and `clippy` (both hard gates,
-`-D warnings`, matching the zero-warnings bar this repo has been held to by
-hand throughout), `test` (a matrix across ubuntu-22.04, ubuntu-24.04, and
+Two workflows. `.github/workflows/ci.yml`: `fmt` (hard gate, `-D
+warnings`), `test` (a matrix across ubuntu-22.04, ubuntu-24.04, and
 ubuntu-24.04-arm, each running the normal suite plus the privileged kernel
 tests via `sudo`, skipping the two cgroup memory-pressure tests that can't
 pass on a hosted runner's cgroup topology, see Known limitations), and
 `determinism-gate` (builds the CLI, runs the FIX rate-limit example
 scenario, then replays it and asserts the trace matches bit-exact, the
 actual promise this README opens with, checked in CI, not just in an
-isolated unit test).
+isolated unit test). `.github/workflows/clippy.yml`: `clippy` (`-D
+warnings`), split into its own workflow file specifically so it gets its
+own status badge, GitHub's badge endpoint only reflects a whole workflow's
+status, not one job inside a shared one.
 
 The arm64 leg is real, not aspirational: `kernel/build.rs` used to hardcode
 the x86_64 multiarch include path, fixed while wiring this up (via
@@ -197,10 +242,9 @@ the x86_64 multiarch include path, fixed while wiring this up (via
 architectures this crate claims to support), otherwise the arm64 job would
 have failed on the first push.
 
-Caveat: this workflow is written against verified facts (the runner labels,
-the actions used, local reproduction of what each job runs) but hasn't
-been exercised by an actual GitHub Actions run yet, that needs a real push
-to confirm.
+Both workflows have run green against real GitHub Actions infrastructure
+across all three matrix legs, more than once, not just written against
+verified facts and left unpushed.
 
 ## Requirements
 
