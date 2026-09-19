@@ -104,10 +104,15 @@ sockets and a real kernel fault, not just unit tested in isolation.
   Every fix here has a live regression test, and every one of those was
   confirmed to actually fail without the fix and pass with it (reverted,
   watched it fail, restored), not just written and trusted.
-- No throughput/load testing on any XDP injector yet, only traffic spaced
-  5ms apart in the live tests. The global atomic counter should hold up
-  under real concurrency, but "should" isn't "verified", worth a real
-  saturation test before trusting the exact drop/corrupt counts under load.
+- `XdpPacketLossInjector` and `XdpCorruptionInjector` are now verified under
+  real concurrent bursty load, not just gently spaced traffic: 8 threads
+  firing 7000 packets with no spacing at all, checking the aggregate drop
+  and corruption counts against an exact modulus rather than correlating
+  order (arrival order isn't guaranteed under real concurrency, only the
+  totals are). `__sync_fetch_and_add` held up exactly in both. This
+  doesn't extend to `XdpPartitionInjector`, whose determinism is a plain
+  IP/port match rather than a counter, so there's no modulus to stress in
+  the same way.
 - None of `XdpPacketLossInjector`, `XdpCorruptionInjector`, and
   `XdpPartitionInjector` can be attached to the same interface
   simultaneously (XDP allows one program per interface per attach mode).
@@ -165,10 +170,13 @@ sockets and a real kernel fault, not just unit tested in isolation.
   built yet, and deliberately not forced through `FixProxy`'s shape since
   one example isn't enough evidence for what a shared proxy abstraction
   across three different protocols should look like.
-- No test yet exercises a real failure path (arming against a nonexistent
-  interface, for example) to confirm `HarnessError::ArmFailed` actually
-  propagates cleanly in practice, only the happy path has live coverage so
-  far.
+- `HarnessError::ArmFailed` is verified on a real failure path now, not
+  just the happy path: `arm_failed_live.rs` arms `XdpPacketLossInjector`
+  against a nonexistent interface and confirms the error propagates
+  cleanly, `is_armed()` stays false, and `disarm()` is still a safe no-op
+  afterward. One injector is enough evidence here, every XDP-based
+  injector in this crate fails through the exact same
+  `program.attach(&iface, ...)` call.
 
 ## CI
 
@@ -188,6 +196,11 @@ the x86_64 multiarch include path, fixed while wiring this up (via
 `dpkg-architecture -qDEB_HOST_MULTIARCH`, with a fallback for the two
 architectures this crate claims to support), otherwise the arm64 job would
 have failed on the first push.
+
+Caveat: this workflow is written against verified facts (the runner labels,
+the actions used, local reproduction of what each job runs) but hasn't
+been exercised by an actual GitHub Actions run yet, that needs a real push
+to confirm.
 
 ## Requirements
 
