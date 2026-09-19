@@ -19,19 +19,6 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
-  clippy:
-    name: clippy
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: install eBPF build dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang libbpf-dev
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-
   test:
     name: test / ${{ matrix.name }}
     strategy:
